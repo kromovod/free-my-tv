@@ -58,6 +58,8 @@ final class HomeApps {
     static final int APP = 0, LIVE_TV = 1, INPUT = 2, ALL_APPS = 3, SETTINGS = 4, ANDROID_SETTINGS = 5, DEVICE = 6;
     /** The "HDMI Inputs" button: opens the bottom drawer on the inputs (the home screen handles it). */
     static final int INPUTS = 7;
+    /** The "Network" button: the TV's own Wi-Fi screen (see HomeApps.open). */
+    static final int NETWORK = 8;
     /** Image size of each card (16:9; on screen it shows up to ~330 px wide). */
     static final int TILE_W = 384, TILE_H = 216;
 
@@ -241,11 +243,12 @@ final class HomeApps {
 
     // MARK: - Top buttons (the round ones at the top right)
 
-    static final String TOP_LIVE = "live", TOP_INPUTS = "inputs", TOP_SETTINGS = "settings";
-    static final List<String> TOP_DEFAULT = Collections.unmodifiableList(java.util.Arrays.asList(TOP_LIVE, TOP_INPUTS, TOP_SETTINGS));
+    static final String TOP_LIVE = "live", TOP_INPUTS = "inputs", TOP_NETWORK = "network", TOP_SETTINGS = "settings";
+    static final List<String> TOP_DEFAULT = Collections.unmodifiableList(
+            java.util.Arrays.asList(TOP_LIVE, TOP_INPUTS, TOP_NETWORK, TOP_SETTINGS));
     static final int MAX_TOP = TOP_DEFAULT.size();
 
-    /** The keys of the top buttons, in order (Settings > Top Buttons; by default Live TV, HDMI Inputs, Settings). */
+    /** The keys of the top buttons, in order (Settings > Top Buttons; by default Live TV, HDMI Inputs, Network, Settings). */
     static List<String> topButtonKeys() {
         List<String> saved = Prefs.topButtons();
         if (saved == null) return TOP_DEFAULT;
@@ -265,6 +268,7 @@ final class HomeApps {
         switch (key) {
             case TOP_LIVE: return action(LIVE_TV, TOP_LIVE, Ui.tr("light|Live TV"), "live_tv");
             case TOP_INPUTS: return action(INPUTS, TOP_INPUTS, Ui.tr("HDMI Inputs"), "hdmi");
+            case TOP_NETWORK: return action(NETWORK, TOP_NETWORK, Ui.tr("Network"), "wifi");
             default: return action(SETTINGS, TOP_SETTINGS, Ui.tr("light|Settings"), "settings");
         }
     }
@@ -570,6 +574,10 @@ final class HomeApps {
             case ANDROID_SETTINGS:
                 intent = new Intent(Settings.ACTION_SETTINGS);
                 break;
+            case NETWORK:
+                // The TV's own Wi-Fi screen: the same one its settings app opens, so the network can be changed here.
+                intent = wifiSettings(a);
+                break;
             case DEVICE:
                 // A fresh task: else Back walks through whatever the maker's settings app had open before
                 intent = new Intent(it.intent).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
@@ -593,6 +601,24 @@ final class HomeApps {
                 return false;
             }
         }
+    }
+
+    /**
+     * The TV's Wi-Fi screen. Android TV's settings app answers android.settings.WIFI_SETTINGS with its own network
+     * screen (on this TCL: com.android.tv.settings/.connectivity.NetworkActivity); a TV that doesn't is asked for the
+     * network picker, then for its settings app, so the button always lands somewhere the network can be changed.
+     */
+    private static Intent wifiSettings(Context a) {
+        Intent wifi = new Intent(Settings.ACTION_WIFI_SETTINGS);
+        if (wifi.resolveActivity(a.getPackageManager()) != null) return wifi;
+        // The network picker (a TV that has one but no plain Wi-Fi screen). The action has no constant in the SDK.
+        Intent picker = new Intent("android.settings.WIFI_PICKER_SETTINGS");
+        if (picker.resolveActivity(a.getPackageManager()) != null) return picker;
+        // Android TV's settings app, by its network screen's name (the one this TCL reports).
+        Intent tv = new Intent().setComponent(new ComponentName("com.android.tv.settings",
+                "com.android.tv.settings.connectivity.NetworkActivity"));
+        if (tv.resolveActivity(a.getPackageManager()) != null) return tv;
+        return new Intent(Settings.ACTION_SETTINGS);
     }
 
     /**

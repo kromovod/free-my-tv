@@ -101,7 +101,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
     private static final float L_TITLE_BASE = 130, L_TABBAR_TOP = 158, L_TABBAR_H = 68, L_CARDS_TOP = 262, L_CARD_H = 442;
     private static final float WATCH_GAP = 40;
-    private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103;
+    private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103, L_CLOCK_GAP = 34;
     private static final float L_PLATTER_TOP = 814, L_TILE_H = 126;
     private static final float L_DATE_BASE = 330, L_CLOCK_BASE = 540, L_WEATHER_BASE = 626, L_QUOTES_BASE = 694;
     private static final int L_INK = 0xFF1D1D1F, L_DIM = 0xFF6E6E73, L_FAINT = 0xFF8E8E93;
@@ -188,7 +188,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private Paint menuTitlePaint, menuSubPaint, menuOptionPaint;
     private final RectF[] cardRects = new RectF[Recs.MAX_CARDS];
     private final List<HomeApps.Item> lightButtons = new ArrayList<>();
-    private Paint lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lTip, lDate, lClock, lWeather, lClockQuote;
+    private Paint lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lTip, lDate, lClock, lWeather, lClockQuote,
+            lCornerClock;
     private Shader lightGradient;
     // Continue Watching: the background takes the focused card's colour (worked out once per picture, WatchArt), easing
     // from one to the next. Drawn as a plain fill under a fixed shade, so a colour change creates nothing per frame.
@@ -293,6 +294,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private int w, h;
     private float k = 1;
     private String clockText = "", dateText = "", weatherLine = "";
+    /** The corner clock's second line ("Wed 28 Oct"), made with the clock, once a minute. */
+    private String cornerDate = "";
     /** "Off in 42 min" next to the round buttons while the sleep timer runs (Settings > Sleep Timer); "" otherwise. */
     private String sleepText = "";
     private long weatherLineAt = -1;
@@ -303,7 +306,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp, dayLow;
-    private Paint pricePaint, changePaint, sheetTitle;
+    private Paint pricePaint, sheetTitle;
     private TextPaint titlePaint, gridLabel, toastPaint;
     private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint imagePaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
@@ -331,15 +334,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private float veilAmount = -1;
     private int veilColor;
     private HomeData.Weather textWeather;
-    private long textPricesAt = -1, textMinute = -1;
+    private long textMinute = -1;
     private int textPrefs = -1;
     private boolean clock24;
     private String textLanguage;
-    private String weatherTitle, nowTemp, highLow, sunriseText, sunsetText, staleText;
+    private String weatherTitle, nowTemp, highLow, sunriseText, sunsetText;
     private final String[] hourText = new String[6], hourTempText = new String[6];
     private final String[] dayText = new String[5], dayMaxText = new String[5], dayMinText = new String[5];
     private boolean textDays;   // the weather card shows the next days (Home Settings → Forecast) and has them
-    private final String[] priceText = new String[HomeData.COINS.length], changeText = new String[HomeData.COINS.length];
 
     /** What the hero shows: a recommendation or, without any, the date, the time and the weather. */
     private static final class Hero {
@@ -373,7 +375,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             switch (kind) {
                 case SKY: drawSky(c); break;
                 case HERO: drawLightTop(c); break;
-                case STATUS: drawLightButtons(c); break;
+                case STATUS: drawLightButtons(c); drawCornerClock(c); break;
                 case PLATTER: drawPlatter(c); break;
                 case TILES: drawTiles(c); break;
                 case DRAWER: drawDrawer(c); break;
@@ -725,6 +727,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lClock.setLetterSpacing(-0.01f);
         lWeather = Ui.text(Ui.medium, 34 * k, L_DIM);
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
+        // The corner clock, after the round buttons: the same weight as the capsule's text, a little larger.
+        lCornerClock = Ui.numbers(Ui.medium, 34 * k, L_INK);
+        lCornerClock.setTextAlign(Paint.Align.RIGHT);
+        lCornerClock.setLetterSpacing(-0.01f);
         lightGradient = tintShade = null;
         buttonPaint = Ui.text(Ui.semibold, 29 * k, INK);
         capsuleText = Ui.numbers(Ui.medium, 29 * k, 0xF2FFFFFF);
@@ -753,8 +759,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         dayLow.setTextAlign(Paint.Align.CENTER);
         pricePaint = Ui.numbers(Ui.medium, 26 * k, 0xF2FFFFFF);
         pricePaint.setTextAlign(Paint.Align.RIGHT);
-        changePaint = Ui.numbers(Ui.semibold, 21 * k, 0xFFFFFFFF);
-        changePaint.setTextAlign(Paint.Align.CENTER);
         sheetTitle = Ui.text(Ui.displaySemibold, 40 * k, 0xFFFFFFFF);
         sheetTitle.setTextAlign(Paint.Align.CENTER);
         gridLabel = new TextPaint(Ui.text(Ui.medium, 24 * k, 0x99FFFFFF));
@@ -782,6 +786,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float dt = lastNanos == 0 ? 1 / 60f : Math.min(0.05f, (frameTimeNanos - lastNanos) / 1e9f);
         lastNanos = frameTimeNanos;
         long up = SystemClock.uptimeMillis();
+        // The card's frame rate: counted here, from the frames this screen really draws.
+        SysInfo.frame(up);
 
         settleWhileSliding();
         boolean tilesMoving = step(tileFocus, dt);
@@ -928,6 +934,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         clockMinute = minute;
         clockText = Ui.clock(now);
         dateText = Ui.date(now);
+        // The corner clock's second line: the weekday and the day, short enough to sit under the time.
+        cornerDate = Ui.datePattern("format|EEE d MMM").format(now);
         return true;
     }
 
@@ -1430,40 +1438,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 tone(30, 34) * k, tone(22, 28) * k, tone(0.65f, 0.95f), 1);
     }
 
-    /** The quotes row's text and sizes, for one set of coins, prices and text size. */
-    private final class Quotes {
-        final int[] coins;
-        final double[] prices;
-        final float size, cap, halfCap;
-        final String[] values;
-        final float[] glyphs, widths;
-
-        Quotes(int[] coins, double[] all, Paint text) {
-            this.coins = coins;
-            size = text.getTextSize();
-            cap = Ui.cap(text);
-            halfCap = Ui.halfCap(text);
-            int n = coins.length;
-            prices = new double[n];
-            values = new String[n];
-            glyphs = new float[n];
-            widths = new float[n];
-            for (int i = 0; i < n; i++) {
-                prices[i] = all[coins[i]];
-                values[i] = HomeData.compact(prices[i]);
-                glyphs[i] = Glyphs.width(getContext(), HomeData.COINS[coins[i]], cap);
-                widths[i] = text.measureText(values[i]);
-            }
-        }
-
-        boolean matches(int[] now, double[] all, float textSize) {
-            if (now != coins || textSize != size) return false;
-            for (int i = 0; i < coins.length; i++) if (Double.compare(all[coins[i]], prices[i]) != 0) return false;
-            return true;
-        }
-    }
-
-    private Quotes quotes;
     // What's playing, cut to fit the tab row and the clock's row: once per title, never while drawing.
     private String playingTab, playingClock;
     private float playingTabWidth, playingTabCap, playingClockCap;
@@ -1529,59 +1503,109 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         playingClock = TextUtils.ellipsize(now, fitPaint, (CONTENT_R - MARGIN - 60) * k, TextUtils.TruncateAt.END).toString();
     }
 
-    /** Coin logo + price in the configured currency, in a row at the right end of the tab bar. */
-    private void drawQuotes(Canvas c) {
+    /**
+     * The performance pill, at the right end of the tab bar (or of the clock's row when there are no picks): the frame
+     * rate the screen is drawing at, the TV's CPU load and the memory the home screen uses, in a small glass capsule.
+     * It replaces the crypto prices, and unlike them it needs no network: the numbers are read from the TV itself.
+     */
+    private void drawStats(Canvas c) {
         boolean clock = clockMode();
-        // At the right margin, under the round buttons: the shelf's glass is narrower and centred with few apps.
-        float right = CONTENT_R * k;
         applyTone();
         Paint text = clock ? lClockQuote : lQuote;
-        // The corner buttons' names appear in this row: the quotes fade out while one of them has focus.
+        // The corner buttons' names appear in this row: the pill fades out while one of them has focus.
         float fade = 1;
         for (int i = 3; i < 3 + lightButtons.size() && !clock; i++) fade = Math.min(fade, 1 - Ui.clamp(topFocus[i].value));
         if (fade <= 0.01f) return;
         int textColor = text.getColor();
         text.setColor(Ui.alpha(textColor, fade));
-        // What an app is playing takes the quotes' place while it plays.
+        // What an app is playing takes the pill's place while it plays.
         String line = clock ? playingClock : playingTab;
         if (line != null) {
             float cap = clock ? playingClockCap : playingTabCap, gap = cap * 0.6f;
             float base = clock ? L_QUOTES_BASE * k : (L_TABBAR_TOP + L_TABBAR_H / 2) * k + cap / 2;
-            float x = clock ? MARGIN * k : right - playingTabWidth - gap - NowPlaying.barsWidth(cap);
+            float x = clock ? MARGIN * k : CONTENT_R * k - playingTabWidth - gap - NowPlaying.barsWidth(cap);
             NowPlaying.drawBars(c, x, base, cap, text, SystemClock.uptimeMillis() < barsUntil, barRect);
             c.drawText(line, x + NowPlaying.barsWidth(cap) + gap, base, text);
             text.setColor(textColor);
             return;
         }
-        // One read of the list, so n always matches the coins drawn below.
-        int[] coins = HomeData.active();
-        int n = coins.length;
-        if (n == 0) { text.setColor(textColor); return; }
-        // Measured once per set of prices: this row is redrawn on every frame of the cards' focus animation, and
+        // One read of the three figures, so the widths and the text always agree.
+        String[] values = statsText();
+        // Measured once per set of figures: this row is redrawn on every frame of the cards' focus animation, and
         // measuring text there cost ~3 ms a frame on a Mi Box 3.
-        Quotes q = quotes;
-        if (q == null || !q.matches(coins, data.prices, text.getTextSize())) {
-            q = quotes = new Quotes(coins, data.prices, text);
-        }
-        // On the tab row, at the right.
-        float base = clock ? L_QUOTES_BASE * k : (L_TABBAR_TOP + L_TABBAR_H / 2) * k + q.halfCap;
-        float cap = q.cap, gap = (clock ? 8 : 6) * k, spacing = (clock ? 32 : 24) * k;
-        float total = spacing * (n - 1);
-        for (int i = 0; i < n; i++) total += q.glyphs[i] + gap + q.widths[i];
-        float x = clock ? MARGIN * k : right - total;
-        int coinColor = clock ? text.getColor() : Ui.alpha(tone(0xB38E8E93, 0x8CFFFFFF), fade);
-        for (int i = 0; i < n; i++) {
-            Glyphs.coin(getContext(), c, HomeData.COINS[coins[i]], x + q.glyphs[i] / 2, base - cap / 2, cap, coinColor);
-            x += q.glyphs[i] + gap;
-            c.drawText(q.values[i], x, base, text);
-            x += q.widths[i] + spacing;
+        Stats s = stats;
+        if (s == null || !s.matches(values, text.getTextSize())) s = stats = new Stats(values, text);
+        float base = clock ? L_QUOTES_BASE * k : (L_TABBAR_TOP + L_TABBAR_H / 2) * k + s.halfCap;
+        float right = CONTENT_R * k, x = right - s.width;
+        // The capsule behind the figures, as in the reference: a dim glass, barely there by day.
+        pill.set(x - PILL_PAD * k, base - s.cap - PILL_PAD * k * 0.62f, right + PILL_PAD * k,
+                base + PILL_PAD * k * 0.62f);
+        fill.setShader(null);
+        fill.setColor(Ui.alpha(tone(0x14000000, 0x33FFFFFF), fade));
+        c.drawRoundRect(pill, pill.height() / 2, pill.height() / 2, fill);
+        // The live dot: green while the screen is drawing, amber while it sits still.
+        float dotR = 5 * k, dotX = x + dotR, dotY = base - s.cap / 2;
+        fill.setColor(Ui.alpha(SysInfo.fps() >= 50 ? 0xFF34C759 : 0xFFFF9F0A, fade));
+        c.drawCircle(dotX, dotY, dotR, fill);
+        x += dotR * 2 + 10 * k;
+        for (int i = 0; i < values.length; i++) {
+            if (i > 0) {
+                // The thin separators between the three figures.
+                fill.setColor(Ui.alpha(tone(0x33000000, 0x4DFFFFFF), fade));
+                c.drawRect(x, base - s.cap - 2 * k, x + Math.max(1, k), base + 2 * k, fill);
+                x += SEP * k;
+            }
+            c.drawText(values[i], x, base, text);
+            x += s.widths[i] + (i == values.length - 1 ? 0 : 8 * k);
         }
         text.setColor(textColor);
-        String stale = HomeData.staleness(data.pricesAt, 5 * 60_000L);
-        if (stale.isEmpty()) return;
-        if (clock) c.drawText(stale, x - spacing + 24 * k + staleQuote.measureText(stale), base, staleQuote);
-        else c.drawText(stale, right - total - 24 * k, base, staleQuote);
     }
+
+    /** The pill's three figures: frames per second, CPU load, and the memory the home screen uses. */
+    private String[] statsText() {
+        // The CPU is sampled once a second here: two reads of /proc/self/stat a second apart give the load between them.
+        long now = SystemClock.uptimeMillis();
+        if (now - cpuAt > 1000) {
+            cpuAt = now;
+            SysInfo.sampleCpu();
+        }
+        return new String[] {SysInfo.fpsText(SysInfo.fps()), "CPU " + SysInfo.percent(SysInfo.cpu()),
+                "RAM " + SysInfo.megabytes(SysInfo.ramMb())};
+    }
+
+    /** The performance pill's text and sizes, for one set of figures and text size. */
+    private final class Stats {
+        final String[] values;
+        final float size, cap, halfCap, width;
+        final float[] widths;
+
+        Stats(String[] values, Paint text) {
+            this.values = values;
+            size = text.getTextSize();
+            cap = Ui.cap(text);
+            halfCap = Ui.halfCap(text);
+            widths = new float[values.length];
+            float total = 0;
+            for (int i = 0; i < values.length; i++) {
+                widths[i] = text.measureText(values[i]);
+                total += widths[i];
+                if (i > 0) total += SEP * k + 8 * k;
+            }
+            // The dot, its gap, and the capsule's padding on both sides.
+            width = total + 10 * k + 10 * k + 2 * PILL_PAD * k;
+        }
+
+        boolean matches(String[] now, float textSize) {
+            if (textSize != size || now.length != values.length) return false;
+            for (int i = 0; i < values.length; i++) if (!now[i].equals(values[i])) return false;
+            return true;
+        }
+    }
+
+    private Stats stats;
+    private long cpuAt;
+    private final RectF pill = new RectF();
+    private static final float SEP = 18, PILL_PAD = 14;
 
     private void drawTiles(Canvas c) {
         // The focused one last: it grows over its neighbors without being covered by them.
@@ -1815,7 +1839,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             x += tw + gap;
         }
         float cardsTop = CARDS_TOP * k, split = left + (right - left) * 0.585f;
-        boolean wx = Prefs.weather(), qt = Prefs.quotes() && HomeData.active().length > 0;
+        boolean wx = Prefs.weather(), qt = Prefs.stats();
         // A card that is off gives its room to the other one.
         weatherCard.set(left, cardsTop, qt ? split - 16 * k : right, cardsTop + CARDS_H * k);
         quotesCard.set(wx ? split + 16 * k : left, cardsTop, right, cardsTop + CARDS_H * k);
@@ -1893,7 +1917,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = 0; i < drawerItems.size(); i++) if (i != top) drawDrawerTile(c, i);
         if (top >= 0) drawDrawerTile(c, top);
         if (Prefs.weather()) drawWeatherCard(c, weatherCard);
-        if (Prefs.quotes() && HomeData.active().length > 0) drawQuotesCard(c, quotesCard);
+        if (Prefs.stats()) drawStatsCard(c, quotesCard);
     }
 
     /** Square drawer button: symbol and name; an input with no device is dimmed. Focused: white, with dark text. */
@@ -2007,15 +2031,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             sunsetText = Ui.trf("Sunset {time}", "time", Ui.time(wx.sunset));
         }
         long minute = System.currentTimeMillis() / 60_000;
-        if (data.pricesAt != textPricesAt || minute != textMinute || settings) {
-            textPricesAt = data.pricesAt;
+        if (minute != textMinute || settings) {
             textMinute = minute;
-            String stale = HomeData.staleness(data.pricesAt, 5 * 60_000L);
-            staleText = stale.isEmpty() ? Ui.tr("24h change") : Ui.trf("quotes|{ago}", "ago", stale);
-            for (int i = 0; i < HomeData.COINS.length; i++) {
-                priceText[i] = HomeData.brl(data.prices[i]);
-                changeText[i] = HomeData.change(data.changes[i]);
-            }
+            // The stats card's figures: the CPU is sampled here, once a minute, and the rest is read as it is drawn.
+            SysInfo.sampleCpu();
         }
     }
 
@@ -2026,19 +2045,19 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return x + sw + 10 * k + cardDim.measureText(label);
     }
 
-    /** Prices in the configured currency with the 24 h change (green/red, like Apple's Stocks app). */
-    private void drawQuotesCard(Canvas c, RectF r) {
+    /** The TV's performance: frame rate, CPU load and the memory the home screen uses. */
+    private void drawStatsCard(Canvas c, RectF r) {
         drawerCard(c, r);
-        if (Ui.LEGACY) quotesSnapshot.draw(c, r, drawerCardsKey(), cc -> drawPrices(cc, r));
-        else drawPrices(c, r);
+        if (Ui.LEGACY) statsSnapshot.draw(c, r, drawerCardsKey(), cc -> drawStatsBody(cc, r));
+        else drawStatsBody(c, r);
     }
 
     /**
      * What the drawer cards show depends on: the data, the settings, the language, day or night, and the minute (the
-     * sunrise and sunset, "12 min ago").
+     * sunrise and sunset, the figures on the stats card).
      */
     private String drawerCardsKey() {
-        return data.weatherAt + "|" + data.pricesAt + "|" + Prefs.version + "|" + Ui.language + "|"
+        return data.weatherAt + "|" + Prefs.version + "|" + Ui.language + "|"
                 + Float.floatToIntBits(dark()) + "|" + System.currentTimeMillis() / 60_000;
     }
 
@@ -2068,31 +2087,29 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
     }
 
-    private final Snapshot weatherSnapshot = new Snapshot(), quotesSnapshot = new Snapshot();
+    private final Snapshot weatherSnapshot = new Snapshot(), statsSnapshot = new Snapshot();
 
-    private void drawPrices(Canvas c, RectF r) {
+    /**
+     * The card's three rows: a name on the left and the figure on the right. The figures are read from the TV, so the
+     * card is right even offline.
+     */
+    private void drawStatsBody(Canvas c, RectF r) {
         float x = r.left + 34 * k, right = r.right - 34 * k;
         refreshDrawerText();
-        c.drawText(Ui.tr("Crypto"), x, r.top + 54 * k, cardTitle);
-        c.drawText(staleText, right, r.top + 54 * k, cardDimRight);
+        c.drawText(Ui.tr("Performance"), x, r.top + 54 * k, cardTitle);
         float cap = Ui.cap(cardText);
-        int[] coins = HomeData.active();
-        for (int j = 0; j < coins.length; j++) {
-            int i = coins[j];
-            float base = r.top + (110 + 52 * j) * k, mid = base - cap / 2;
-            float gw = Glyphs.width(getContext(), HomeData.COINS[i], cap);
-            Glyphs.coin(getContext(), c, HomeData.COINS[i], x + 14 * k, mid, cap, tone(L_DIM, 0xCCFFFFFF));
-            c.drawText(HomeData.coinName(i), x + Math.max(gw, 28 * k) / 2 + 30 * k, base, cardText);
-            c.drawText(priceText[i], right - 128 * k, base, pricePaint);
-            double change = data.changes[i];
-            if (Double.isNaN(change)) continue;
-            int color = change >= 0 ? tone(0xFF248A3D, UP_COLOR) : tone(0xFFD70015, DOWN_COLOR);
-            tmp.set(right - 108 * k, mid - 17 * k, right, mid + 17 * k);
+        String[] names = {Ui.tr("Frames per second"), Ui.tr("CPU"), Ui.tr("Memory")};
+        String[] values = {SysInfo.fpsText(SysInfo.fps()), SysInfo.percent(SysInfo.cpu()),
+                SysInfo.megabytes(SysInfo.ramMb())};
+        for (int i = 0; i < names.length; i++) {
+            float base = r.top + (110 + 52 * i) * k, mid = base - cap / 2;
+            // A small bar before each name, in the color of what it measures: the frame rate's is the live dot's.
             fill.setShader(null);
-            fill.setColor(Ui.alpha(color, 0.2f));
-            c.drawRoundRect(tmp, 17 * k, 17 * k, fill);
-            changePaint.setColor(color);
-            c.drawText(changeText[i], tmp.centerX(), mid + Ui.halfCap(changePaint), changePaint);
+            fill.setColor(i == 0 ? (SysInfo.fps() >= 50 ? 0xFF34C759 : 0xFFFF9F0A)
+                    : tone(0x661E1E1E, 0x66FFFFFF));
+            c.drawRoundRect(x, mid - 8 * k, x + 8 * k, mid + 8 * k, 4 * k, 4 * k, fill);
+            c.drawText(names[i], x + 24 * k, base, cardText);
+            c.drawText(values[i], right, base, pricePaint);
         }
     }
 
@@ -2955,7 +2972,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = shelfFirst; i < Math.min(shelf.size(), shelfFirst + shelfVisible); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
         if (drawerOpen && Prefs.weather()) out.add(a11yId(WIDGETS, 0));
-        if (drawerOpen && Prefs.quotes() && HomeData.active().length > 0) out.add(a11yId(WIDGETS, 1));
+        if (drawerOpen && Prefs.stats()) out.add(a11yId(WIDGETS, 1));
     }
 
     private String a11yText(int id) {
@@ -3083,7 +3100,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         List<Integer> out = new ArrayList<>();
         if (!drawerOpen) return out;
         if (Prefs.weather()) out.add(0);
-        if (Prefs.quotes() && HomeData.active().length > 0) out.add(1);
+        if (Prefs.stats()) out.add(1);
         return out;
     }
 
@@ -3195,16 +3212,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return s.toString();
     }
 
-    /** The quotes card as TalkBack reads it: each coin with its price and 24 h change. */
+    /** The stats card as TalkBack reads it: the frame rate, the CPU load and the memory. */
     private String quotesText() {
-        StringBuilder s = new StringBuilder(Ui.tr("Crypto"));
-        String stale = HomeData.staleness(data.pricesAt, 5 * 60_000L);
-        s.append(", ").append(stale.isEmpty() ? Ui.tr("24h change") : Ui.trf("quotes|{ago}", "ago", stale)).append('.');
-        for (int i : HomeData.active()) {
-            s.append(' ').append(HomeData.coinName(i)).append(' ').append(HomeData.brl(data.prices[i]));
-            if (!Double.isNaN(data.changes[i])) s.append(", ").append(HomeData.change(data.changes[i]));
-            s.append('.');
-        }
+        StringBuilder s = new StringBuilder(Ui.tr("Performance"));
+        s.append(". ").append(Ui.tr("Frames per second")).append(' ').append(SysInfo.fpsText(SysInfo.fps()));
+        s.append(". ").append(Ui.tr("CPU")).append(' ').append(SysInfo.percent(SysInfo.cpu()));
+        s.append(". ").append(Ui.tr("Memory")).append(' ').append(SysInfo.megabytes(SysInfo.ramMb()));
         return s.toString();
     }
 
@@ -3222,6 +3235,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             x = topRects[i].right + 4 * k;
         }
         float b = L_BUTTON * k, right = CONTENT_R * k, cy = L_BUTTON_CY * k;
+        // The clock sits after the buttons: the row ends where its widest line does, so the buttons step left of it.
+        float clockW = 0;
+        if (lCornerClock != null && clockText != null && !clockText.isEmpty()) {
+            clockW = Math.max(lCornerClock.measureText(clockText),
+                    lQuote == null ? 0 : lQuote.measureText(cornerDate)) + L_CLOCK_GAP * k;
+        }
+        right -= clockW;
         for (int i = lightButtons.size() - 1; i >= 0; i--) {
             topRects[3 + i].set(right - b, cy - b / 2, right, cy + b / 2);
             right -= b + L_BUTTON_GAP * k;
@@ -3845,7 +3865,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (clockMode()) {
             titleRight = 0;
             drawClock(c);
-            if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
+            drawStats(c);
             return;
         }
         String hello = picksMode() ? Ui.tr("For You") : Ui.tr("Continue Watching");
@@ -3853,7 +3873,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         titleRight = MARGIN * k + lTitle.measureText(hello);
         if (!picksMode()) {
             if (continueMode()) drawWatchRow(c);
-            if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
+            drawStats(c);
             return;
         }
         // Text tabs (the selected one in bold, in the main text color); with focus on the tabs, the selected one gets
@@ -3886,7 +3906,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = 0; i < slots; i++) if (cardFocus[i].value > 0.02f && (top < 0 || cardFocus[i].value > cardFocus[top].value)) top = i;
         for (int i = 0; i < slots; i++) if (i != top) drawLightCard(c, i);
         if (top >= 0) drawLightCard(c, top);
-        if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
+        drawStats(c);
     }
 
     private boolean picksOn() {
@@ -4029,6 +4049,30 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float tw = lQuote.measureText(sleepText), size = lQuote.getTextSize();
         c.drawText(sleepText, right - tw, cy + Ui.halfCap(lQuote), lQuote);
         Symbols.draw(getContext(), c, "bedtime", right - tw - size * 0.9f, cy, size, lQuote.getColor());
+    }
+
+    /**
+     * The clock after the round buttons, at the right end of the row they sit in: the time, and the date under it in
+     * the smaller dim type the tabs use. It is drawn on the status layer with the buttons, so it costs nothing extra,
+     * and it leaves with them when the drawer opens.
+     */
+    private void drawCornerClock(Canvas c) {
+        if (clockText.isEmpty()) return;
+        applyTone();
+        float right = CONTENT_R * k, cy = L_BUTTON_CY * k;
+        // The buttons' names appear under them when one has focus: the clock steps aside for that, as the pill does.
+        float fade = 1;
+        for (int i = 3; i < 3 + lightButtons.size(); i++) fade = Math.min(fade, 1 - Ui.clamp(topFocus[i].value));
+        if (fade <= 0.01f) return;
+        lCornerClock.setColor(Ui.alpha(tone(L_INK, WHITE), fade));
+        c.drawText(clockText, right, cy + Ui.halfCap(lCornerClock), lCornerClock);
+        String date = cornerDate;
+        if (date.isEmpty()) return;
+        Paint small = lQuote;
+        int color = small.getColor();
+        small.setColor(Ui.alpha(tone(L_DIM, 0xB3FFFFFF), fade));
+        c.drawText(date, right - small.measureText(date), cy + Ui.halfCap(lCornerClock) + 26 * k, small);
+        small.setColor(color);
     }
 
     private boolean moveLight(int dx, int dy) {

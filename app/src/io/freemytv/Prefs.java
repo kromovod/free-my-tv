@@ -233,7 +233,7 @@ final class Prefs {
     static Set<String> watchHidden() { return new HashSet<>(sp().getStringSet("watchHidden", new HashSet<>())); }
     static void setWatchHidden(Set<String> keys) { putQuietly("watchHidden", keys); }
 
-    // MARK: - Widgets and coins
+    // MARK: - Widgets
 
     static boolean weather() { return sp().getBoolean("weather", true); }
     static void setWeather(boolean on) { put("weather", on); }
@@ -247,15 +247,13 @@ final class Prefs {
         version++;
     }
 
-    static boolean quotes() { return sp().getBoolean("quotes", Config.SHOW_CRYPTO); }
-    static void setQuotes(boolean on) { put("quotes", on); }
+    /** The performance card and pill: the frame rate, the CPU load and the memory the home screen uses. */
+    static boolean stats() { return sp().getBoolean("stats", true); }
+    static void setStats(boolean on) { put("stats", on); }
 
     /** Your photos (Photos, sent from a computer) on the screensaver and behind the home screen, once imported. */
     static boolean photos() { return sp().getBoolean("photos", true); }
     static void setPhotos(boolean on) { put("photos", on); }
-
-    static boolean coin(int i) { return sp().getBoolean("coin" + i, true); }
-    static void setCoin(int i, boolean on) { put("coin" + i, on); }
 
     // MARK: - TMDB key
 

@@ -799,16 +799,12 @@ public class SettingsActivity extends Activity {
 
         private static final String[] UNITS = {"auto", "C", "F"}, THEMES = {"auto", "light", "dark"};
         /** Home Settings: language, temperature, theme, my photos, sounds, top of the screen, picks, Continue Watching's
-         *  apps, watch from the screensaver, weather, city, forecast, now playing, quotes, one row per coin, then the TMDB
+         *  apps, watch from the screensaver, weather, city, forecast, now playing, the performance card, then the TMDB
          *  key and updates (the last row). */
         private static final int PHOTOS_ROW = 3, TOP_ROW = 5, PICKS_ROW = 6, WATCH_ROW = 7, SAVER_ROW = 8, WEATHER_ROW = 9,
-                CITY_ROW = 10, FORECAST_ROW = 11, PLAYING_ROW = 12, QUOTES_ROW = 13, COIN_ROWS = 14;
+                CITY_ROW = 10, FORECAST_ROW = 11, PLAYING_ROW = 12, STATS_ROW = 13;
         /** Home Settings rows on screen at once (what fits above the hints at 1080p); a longer list scrolls. */
         private static final int SETTINGS_VISIBLE = 10;
-
-        private boolean dollar() {
-            return "BRL".equals(Place.currency());
-        }
 
         private String[] settingLabels() {
             List<String> l = new ArrayList<>();
@@ -825,11 +821,7 @@ public class SettingsActivity extends Activity {
             l.add(Ui.tr("City"));
             l.add(Ui.tr("Forecast"));
             l.add(Ui.tr("Now Playing widget"));
-            l.add(Ui.tr("Quotes widget"));
-            l.add("Bitcoin");
-            l.add("Ethereum");
-            l.add("Solana");
-            if (dollar()) l.add(Ui.tr("Dollar"));
+            l.add(Ui.tr("Performance card"));
             l.add(Ui.tr("TMDB key"));
             l.add(Ui.tr("Updates"));
             return l.toArray(new String[0]);
@@ -882,9 +874,7 @@ public class SettingsActivity extends Activity {
             v[CITY_ROW] = !cityStatus.isEmpty() ? cityStatus : Prefs.city().isEmpty() ? "—" : Prefs.city();
             v[FORECAST_ROW] = Prefs.forecast().equals("days") ? Ui.tr("Next days") : Ui.tr("Next hours");
             v[PLAYING_ROW] = onOff(Prefs.nowPlaying());
-            v[QUOTES_ROW] = onOff(Prefs.quotes());
-            // No quotes widget, nowhere to show prices: the coins read as off (and stay locked) until it is back on.
-            for (int i = COIN_ROWS; i < v.length - 2; i++) v[i] = onOff(Prefs.quotes() && Prefs.coin(i - COIN_ROWS));
+            v[STATS_ROW] = onOff(Prefs.stats());
             v[v.length - 2] = keyValue();
             v[v.length - 1] = updatesValue();
             return v;
@@ -932,9 +922,7 @@ public class SettingsActivity extends Activity {
                 whyScroll = pickScroll;
                 for (int r = 0; r < n; r++) {
                     String need = need(r);
-                    whyRows[r] = screen == HOME_SETTINGS && pickScroll + r >= COIN_ROWS && pickScroll + r < keyRow() && !Prefs.quotes()
-                            ? Ui.tr("Turn on the Quotes widget to pick its coins.")
-                            : need == null ? null : Capabilities.missing(getContext(), need);
+                    whyRows[r] = need == null ? null : Capabilities.missing(getContext(), need);
                 }
             }
             return whyRows[i];
@@ -1186,10 +1174,9 @@ public class SettingsActivity extends Activity {
                     Prefs.setNowPlaying(!Prefs.nowPlaying());
                     HomeMode.nowPlayingAccess(getContext());
                     break;
-                case QUOTES_ROW: Prefs.setQuotes(!Prefs.quotes()); break;
+                case STATS_ROW: Prefs.setStats(!Prefs.stats()); break;
                 default:
-                    if (row >= keyRow() || !Prefs.quotes()) return;   // the key and Updates act on OK only
-                    Prefs.setCoin(row - COIN_ROWS, !Prefs.coin(row - COIN_ROWS));
+                    if (row >= keyRow()) return;   // the key and Updates act on OK only
                     break;
             }
             HomeData.get(getContext()).settingsChanged();
