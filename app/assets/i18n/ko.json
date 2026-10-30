@@ -202,6 +202,7 @@
   "Sony default": "Sony 기본값",
   "Sony default: the button opens what it always did.": "Sony 기본값: 버튼이 원래 열던 앱을 엽니다.",
   "Starting…": "시작 중…",
+  "Storage": "저장 공간",
   "Sunrise {time}": "일출 {time}",
   "Sunset {time}": "일몰 {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "전환에 몇 초가 걸리며, 측정하는 동안 화면이 깜박입니다.",
@@ -265,6 +266,7 @@
   "YouTube button": "YouTube 버튼",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video, Google Play 버튼은 TV에서 직접 제어합니다.",
   "Your TV's home screen and screensaver": "TV의 홈 화면과 화면 보호기",
+  "avg {n}%": "평균 {n}%",
   "debugging is off on the TV (port 5555 closed)": "TV에서 디버깅이 꺼져 있습니다(포트 5555 닫힘)",
   "debugging permission wasn't accepted on the TV": "TV에서 디버깅 권한이 허용되지 않았습니다",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, 탭 {i}/{n}",
   "{n} GB": "{n}GB",
   "{n} MB": "{n}MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} 여유",
   "{n} h": "{n}시간",
   "{n} h ago": "{n}시간 전",
   "{n} min": "{n}분",
@@ -364,6 +368,7 @@
   "{n} ms": "{n}ms",
   "{on} of {total}": "{total}개 중 {on}개",
   "{time} left": "{time} 남음",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "{version} 출시: 다시 빌드하세요",
   "← → to move · OK to drop · Back to cancel": "← → 이동 · OK 배치 · 뒤로 취소"
 }

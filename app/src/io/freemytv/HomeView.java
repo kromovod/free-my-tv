@@ -15,6 +15,7 @@ import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
@@ -52,15 +53,15 @@ import java.util.function.Consumer;
 /**
  * The home screen, styled after the Apple TV app with the macOS 27 glass:
  *  - at the top left, the "For You" title and the tabs (Explore, Movies, Shows); at the top right, icon-only glass
- *    buttons (Live TV, HDMI Inputs, Settings), with the focused one's name below it, and the small crypto quotes
- *    (logo + price) at the right end of the tab row;
+ *    buttons (Live TV, HDMI Inputs, Settings), with the focused one's name below it, and the live performance pill
+ *    (frame rate, CPU and memory) at the right end of the tab row;
  *  - three cards with the titles recommended for right now in the selected tab (Recs, from TMDB); the background is
  *    the first card's photo, heavily blurred and almost white (Backdrop); without picks, one of your own photos
  *    (Photos) the same way, or else a light gradient;
  *  - at the bottom, the glass shelf with the apps (icons in each brand's color, like the tvOS Dock; the focused one
  *    grows);
- *  - ↓ on the shelf: everything moves up and the bottom drawer appears (inputs, shortcuts, weather for the next hours or days
- *    and quotes with the 24 h change); the background lightens (darkens at night). ↑ or Back closes it;
+ *  - ↓ on the shelf: everything moves up and the bottom drawer appears (inputs, shortcuts, weather for the next hours
+ *    or days, and a performance card); the background lightens (darkens at night). ↑ or Back closes it;
  *  - from sunset to sunrise, a night look: dark background, smoked glass and white text.
  * Measurements are in a 1920×1080 space (k = width / 1920). The screen is split into layers so the TV's weak GPU only
  * redraws what changed.
@@ -289,6 +290,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // Frames
     private boolean running, tilesDirty, statusDirty, heroDirty, drawerDirty, gridDirty, motionDirty = true;
     private boolean drawerWasMoving, idle;
+    private long statsSecond;   // the last second the performance card was redrawn (it is a live dashboard)
     private long lastNanos, resumedAt, lastStep;
     private static final long BURST_MS = 1500;
     private int w, h;
@@ -306,7 +308,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp, dayLow;
-    private Paint pricePaint, sheetTitle;
+    private Paint sheetTitle, cardBig, cardUnit, cardValue, chartLine;
+    private final Paint chartArea = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path chartPath = new Path(), chartFillPath = new Path(), arrowPath = new Path();
+    private LinearGradient chartShader;
+    private float chartShaderW, chartShaderH;
+    private final float[] cpuHistory = new float[SysInfo.HISTORY];
+    private final RectF statCell = new RectF();
     private TextPaint titlePaint, gridLabel, toastPaint;
     private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint imagePaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
@@ -334,7 +342,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private float veilAmount = -1;
     private int veilColor;
     private HomeData.Weather textWeather;
-    private long textMinute = -1;
     private int textPrefs = -1;
     private boolean clock24;
     private String textLanguage;
@@ -757,8 +764,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         hourTemp.setTextAlign(Paint.Align.CENTER);
         dayLow = Ui.numbers(Ui.medium, 22 * k, 0xADFFFFFF);
         dayLow.setTextAlign(Paint.Align.CENTER);
-        pricePaint = Ui.numbers(Ui.medium, 26 * k, 0xF2FFFFFF);
-        pricePaint.setTextAlign(Paint.Align.RIGHT);
+        // The performance card's dashboard: a large CPU figure, the values at the right of each bar, and the line.
+        cardBig = Ui.numbers(Ui.light, 74 * k, 0xFFFFFFFF);
+        cardUnit = Ui.numbers(Ui.light, 28 * k, 0xB3FFFFFF);
+        cardValue = Ui.numbers(Ui.semibold, 26 * k, 0xF2FFFFFF);
+        cardValue.setTextAlign(Paint.Align.RIGHT);
+        chartLine = new Paint(Paint.ANTI_ALIAS_FLAG);
+        chartLine.setStyle(Paint.Style.STROKE);
+        chartLine.setStrokeWidth(2.5f * k);
+        chartLine.setStrokeCap(Paint.Cap.ROUND);
+        chartLine.setStrokeJoin(Paint.Join.ROUND);
+        chartShader = null;     // the line's fade is made for one size
         sheetTitle = Ui.text(Ui.displaySemibold, 40 * k, 0xFFFFFFFF);
         sheetTitle.setTextAlign(Paint.Align.CENTER);
         gridLabel = new TextPaint(Ui.text(Ui.medium, 24 * k, 0x99FFFFFF));
@@ -788,6 +804,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         long up = SystemClock.uptimeMillis();
         // The card's frame rate: counted here, from the frames this screen really draws.
         SysInfo.frame(up);
+        // The CPU and the network once a second: the pill and the performance card both show them.
+        SysInfo.tick(up);
+        // The performance card is a dashboard: while the drawer shows it, redraw it once a second (the drawer's frame
+        // callback runs anyway when it is open; only the content needs the nudge).
+        if (drawerOpen && up / 1000 != statsSecond) {
+            statsSecond = up / 1000;
+            drawerDirty = true;
+        }
 
         settleWhileSliding();
         boolean tilesMoving = step(tileFocus, dt);
@@ -1167,6 +1191,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private float tone(float onLight, float onDark) {
         return onLight + (onDark - onLight) * dark();
+    }
+
+    /** The performance card's blue: the bars and the CPU's line (a little lighter at night, on the smoked glass). */
+    private int accent() {
+        return tone(0xFF007AFF, 0xFF3F8CFF);
     }
 
     /** Text colors for the current night value (dark by day, white at night). */
@@ -1563,12 +1592,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The pill's three figures: frames per second, CPU load, and the memory the home screen uses. */
     private String[] statsText() {
-        // The CPU is sampled once a second here: two reads of /proc/self/stat a second apart give the load between them.
-        long now = SystemClock.uptimeMillis();
-        if (now - cpuAt > 1000) {
-            cpuAt = now;
-            SysInfo.sampleCpu();
-        }
+        // The CPU is sampled once a second in SysInfo.tick, not here: two reads a frame apart would measure nothing.
         return new String[] {SysInfo.fpsText(SysInfo.fps()), "CPU " + SysInfo.percent(SysInfo.cpu()),
                 "RAM " + SysInfo.megabytes(SysInfo.ramMb())};
     }
@@ -1603,7 +1627,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private Stats stats;
-    private long cpuAt;
     private final RectF pill = new RectF();
     private static final float SEP = 18, PILL_PAD = 14;
 
@@ -1908,7 +1931,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         hourPaint.setColor(tone(L_DIM, 0xADFFFFFF));
         hourTemp.setColor(drawerInk(0.95f));
         dayLow.setColor(tone(L_DIM, 0xADFFFFFF));
-        pricePaint.setColor(drawerInk(0.95f));
+        cardBig.setColor(drawerInk(1));
+        cardUnit.setColor(tone(L_DIM, 0xB3FFFFFF));
+        cardValue.setColor(drawerInk(0.98f));
         float titleBase = ROW_TITLE * k;
         if (drawerInputs > 0) c.drawText(Ui.tr("Inputs"), drawerRects[0].left + 4 * k, titleBase, rowTitle);
         if (drawerInputs < drawerItems.size()) c.drawText(Ui.tr("Shortcuts"), drawerRects[drawerInputs].left + 4 * k, titleBase, rowTitle);
@@ -2030,12 +2055,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             sunriseText = Ui.trf("Sunrise {time}", "time", Ui.time(wx.sunrise));
             sunsetText = Ui.trf("Sunset {time}", "time", Ui.time(wx.sunset));
         }
-        long minute = System.currentTimeMillis() / 60_000;
-        if (minute != textMinute || settings) {
-            textMinute = minute;
-            // The stats card's figures: the CPU is sampled here, once a minute, and the rest is read as it is drawn.
-            SysInfo.sampleCpu();
-        }
     }
 
     private float sunItem(Canvas c, String symbol, String label, float x, float base) {
@@ -2045,10 +2064,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return x + sw + 10 * k + cardDim.measureText(label);
     }
 
-    /** The TV's performance: frame rate, CPU load and the memory the home screen uses. */
+    /** The TV's performance, as a dashboard: CPU (now and its last minute), memory, storage and the network. */
     private void drawStatsCard(Canvas c, RectF r) {
         drawerCard(c, r);
-        if (Ui.LEGACY) statsSnapshot.draw(c, r, drawerCardsKey(), cc -> drawStatsBody(cc, r));
+        // Keyed by the second (not the minute like the weather card): this card is a live dashboard, and the figures,
+        // the line and the speeds change all the time.
+        if (Ui.LEGACY) statsSnapshot.draw(c, r, drawerCardsKey() + "|" + SystemClock.uptimeMillis() / 1000,
+                cc -> drawStatsBody(cc, r));
         else drawStatsBody(c, r);
     }
 
@@ -2090,27 +2112,160 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final Snapshot weatherSnapshot = new Snapshot(), statsSnapshot = new Snapshot();
 
     /**
-     * The card's three rows: a name on the left and the figure on the right. The figures are read from the TV, so the
-     * card is right even offline.
+     * The card's dashboard: the CPU load large on the left with its last minute's average under it, the memory in use
+     * and the storage left as labelled bars on the right, the CPU's last minute as a line under them, and the network's
+     * speed at the bottom. Everything is read from the TV, so the card is right even offline.
      */
     private void drawStatsBody(Canvas c, RectF r) {
-        float x = r.left + 34 * k, right = r.right - 34 * k;
         refreshDrawerText();
-        c.drawText(Ui.tr("Performance"), x, r.top + 54 * k, cardTitle);
-        float cap = Ui.cap(cardText);
-        String[] names = {Ui.tr("Frames per second"), Ui.tr("CPU"), Ui.tr("Memory")};
-        String[] values = {SysInfo.fpsText(SysInfo.fps()), SysInfo.percent(SysInfo.cpu()),
-                SysInfo.megabytes(SysInfo.ramMb())};
-        for (int i = 0; i < names.length; i++) {
-            float base = r.top + (110 + 52 * i) * k, mid = base - cap / 2;
-            // A small bar before each name, in the color of what it measures: the frame rate's is the live dot's.
-            fill.setShader(null);
-            fill.setColor(i == 0 ? (SysInfo.fps() >= 50 ? 0xFF34C759 : 0xFFFF9F0A)
-                    : tone(0x661E1E1E, 0x66FFFFFF));
-            c.drawRoundRect(x, mid - 8 * k, x + 8 * k, mid + 8 * k, 4 * k, 4 * k, fill);
-            c.drawText(names[i], x + 24 * k, base, cardText);
-            c.drawText(values[i], right, base, pricePaint);
+        // The TV's memory and storage: a system call, read once a second and only while this card draws.
+        SysInfo.sampleTv(getContext());
+        float pad = 34 * k, top = r.top, left = r.left + pad, right = r.right - pad;
+        // The rows sit a little above the middle of the card (it is 300 tall): the footer was hugging its bottom edge.
+        c.drawText(Ui.tr("Performance"), left, top + 52 * k, cardTitle);
+        // The frame rate ends the title's row, as on the pill: a dot, green while the screen is drawing.
+        String fps = SysInfo.fpsText(SysInfo.fps());
+        float fpsW = cardDim.measureText(fps);
+        fill.setShader(null);
+        fill.setColor(SysInfo.fps() >= 50 ? 0xFF34C759 : 0xFFFF9F0A);
+        c.drawCircle(right - fpsW - 16 * k, top + 52 * k - Ui.halfCap(cardDim), 5 * k, fill);
+        c.drawText(fps, right - fpsW, top + 52 * k, cardDim);
+
+        // The CPU, large as on the dashboard this card follows.
+        c.drawText(Ui.tr("CPU"), left, top + 88 * k, cardDim);
+        int cpu = SysInfo.cpu();
+        String load = cpu < 0 ? "—" : String.valueOf(cpu);
+        float base = top + 160 * k, bearing = Ui.leftBearing(cardBig, load);
+        c.drawText(load, left - bearing, base, cardBig);
+        if (cpu >= 0) c.drawText("%", left - bearing + cardBig.measureText(load) + 6 * k, base, cardUnit);
+        c.drawText(avgText(), left, top + 186 * k, cardDim);
+
+        // The memory in use and the storage left: a name and its figure, and a bar filled by what's used.
+        float rows = left + Math.min(300 * k, Math.max(240 * k, (right - left) * 0.30f)) + 24 * k;
+        int totalMb = SysInfo.memTotalMb(), usedMb = SysInfo.memUsedMb();
+        statRow(c, rows, right, top + 98 * k, top + 110 * k, Ui.tr("Memory"), memoryText(),
+                totalMb > 0 ? usedMb / (float) totalMb : 0);
+        long freeMb = SysInfo.storageFreeMb(), allMb = SysInfo.storageTotalMb();
+        statRow(c, rows, right, top + 154 * k, top + 166 * k, Ui.tr("Storage"), storageText(),
+                allMb > 0 ? (allMb - freeMb) / (float) allMb : 0);
+
+        // The CPU over the last minute, and the network's speed at both ends of the card.
+        drawCpuChart(c, left, right, top + 198 * k, top + 248 * k);
+        speedItem(c, left, right, top + 270 * k, true, SysInfo.downMbs());
+        speedItem(c, left, right, top + 270 * k, false, SysInfo.upMbs());
+    }
+
+    /** One row of the dashboard: its name, the figure at the right, and a bar under them with `part` of it filled. */
+    private void statRow(Canvas c, float left, float right, float nameBase, float barTop,
+                         String name, String value, float part) {
+        // The figure is short and must stay whole; a long name ("Armazenamento", "Speicherplatz") or the language's
+        // longest figure ("18,6 GB livres") shrinks it a little before it gets cut.
+        float room = right - left, gap = 16 * k, valueW = cardValue.measureText(value);
+        fitPaint.set(cardTitle);
+        float nameW = fitPaint.measureText(name);
+        if (nameW + gap + valueW > room) {
+            float fits = Math.max(0, room - valueW - gap);
+            fitPaint.setTextSize(Math.max(16 * k, cardTitle.getTextSize() * fits / nameW));
+            name = TextUtils.ellipsize(name, fitPaint, fits, TextUtils.TruncateAt.END).toString();
         }
+        c.drawText(name, left, nameBase, fitPaint);
+        c.drawText(value, right, nameBase, cardValue);
+        float barH = 8 * k, radius = barH / 2;
+        fill.setShader(null);
+        fill.setColor(tone(0x1F000000, 0x33FFFFFF));
+        statCell.set(left, barTop, right, barTop + barH);
+        c.drawRoundRect(statCell, radius, radius, fill);
+        part = Ui.clamp(part);
+        if (part > 0.01f) {
+            // At least a cap's width, so a sliver still reads as filled.
+            statCell.right = left + Math.max(barH, (right - left) * part);
+            fill.setColor(accent());
+            c.drawRoundRect(statCell, radius, radius, fill);
+        }
+    }
+
+    /** "avg 18%": the CPU's load over the last minute, or "—" when it can't be read. */
+    private String avgText() {
+        int avg = SysInfo.cpuAverage();
+        return avg < 0 ? "—" : Ui.trf("avg {n}%", "n", avg);
+    }
+
+    /** "2.4 / 3.9 GB": the memory in use out of the TV's. */
+    private String memoryText() {
+        int total = SysInfo.memTotalMb(), used = SysInfo.memUsedMb();
+        if (total <= 0 || used < 0) return SysInfo.megabytes(used);
+        return Ui.trf("{used} / {total} GB", "used", SysInfo.one(used / 1024f), "total", SysInfo.one(total / 1024f));
+    }
+
+    /** "18.6 GB free". */
+    private String storageText() {
+        long free = SysInfo.storageFreeMb();
+        return free < 0 ? "—" : Ui.trf("{n} free", "n", SysInfo.size(free));
+    }
+
+    /**
+     * The CPU's load over the last minute, as a line with a fade under it and a dot at the newest value (the card's
+     * dashboard). Nothing is allocated here: the path, the paint and the fade are made once.
+     */
+    private void drawCpuChart(Canvas c, float left, float right, float top, float bottom) {
+        int n = SysInfo.history(cpuHistory);
+        if (n == 0) return;
+        // The line uses at most a tenth of the card for a light load: on the full 0–100% a home screen at 2% would be a
+        // flat line on the card's floor. It grows only when the load really goes higher.
+        float peak = 0;
+        for (int i = 0; i < n; i++) peak = Math.max(peak, cpuHistory[i]);
+        float ceil = Math.max(10, (float) Math.ceil(peak / 10f) * 10f);
+        float w = right - left, h = bottom - top, x = left, y = bottom;
+        chartPath.reset();
+        chartFillPath.reset();
+        chartFillPath.moveTo(left, bottom);
+        for (int i = 0; i < n; i++) {
+            x = n == 1 ? right : left + w * i / (n - 1f);
+            y = bottom - h * Ui.clamp(cpuHistory[i] / ceil);
+            if (i == 0) chartPath.moveTo(x, y); else chartPath.lineTo(x, y);
+            chartFillPath.lineTo(x, y);
+        }
+        chartFillPath.lineTo(right, bottom);
+        chartFillPath.close();
+        if (chartShader == null || chartShaderW != w || chartShaderH != h) {
+            chartShader = new LinearGradient(0, top, 0, bottom, Ui.alpha(accent(), 0.30f), Ui.alpha(accent(), 0),
+                    Shader.TileMode.CLAMP);
+            chartShaderW = w;
+            chartShaderH = h;
+        }
+        chartArea.setShader(chartShader);
+        c.drawPath(chartFillPath, chartArea);
+        chartLine.setColor(accent());
+        c.drawPath(chartPath, chartLine);
+        // The newest value: a dot with a light center, as at the end of the line in the reference.
+        fill.setShader(null);
+        fill.setColor(accent());
+        c.drawCircle(x, y, 6 * k, fill);
+        fill.setColor(drawerInk(1));
+        c.drawCircle(x, y, 2.5f * k, fill);
+    }
+
+    /** One end of the card's footer: an arrow (down for what came in, up for what went out) and the speed. */
+    private void speedItem(Canvas c, float left, float right, float base, boolean down, float mbs) {
+        String text = mbs < 0 ? "—" : Ui.trf("{n} MB/s", "n", SysInfo.one(mbs));
+        float textW = cardDim.measureText(text), arrowW = 11 * k, gap = 8 * k;
+        float start = down ? left : right - arrowW - gap - textW;
+        float cy = base - Ui.halfCap(cardDim), half = 5 * k;
+        arrowPath.reset();
+        if (down) {
+            arrowPath.moveTo(start, cy - half * 0.8f);
+            arrowPath.lineTo(start + arrowW, cy - half * 0.8f);
+            arrowPath.lineTo(start + arrowW / 2, cy + half);
+        } else {
+            arrowPath.moveTo(start + arrowW / 2, cy - half);
+            arrowPath.lineTo(start + arrowW, cy + half * 0.8f);
+            arrowPath.lineTo(start, cy + half * 0.8f);
+        }
+        arrowPath.close();
+        fill.setShader(null);
+        fill.setColor(cardDim.getColor());
+        c.drawPath(arrowPath, fill);
+        c.drawText(text, start + arrowW + gap, base, cardDim);
     }
 
     // MARK: - Focus
@@ -3212,12 +3367,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return s.toString();
     }
 
-    /** The stats card as TalkBack reads it: the frame rate, the CPU load and the memory. */
+    /** The stats card as TalkBack reads it: the frame rate, the CPU load, the memory and the storage. */
     private String quotesText() {
         StringBuilder s = new StringBuilder(Ui.tr("Performance"));
         s.append(". ").append(Ui.tr("Frames per second")).append(' ').append(SysInfo.fpsText(SysInfo.fps()));
-        s.append(". ").append(Ui.tr("CPU")).append(' ').append(SysInfo.percent(SysInfo.cpu()));
-        s.append(". ").append(Ui.tr("Memory")).append(' ').append(SysInfo.megabytes(SysInfo.ramMb()));
+        s.append(". ").append(Ui.tr("CPU")).append(' ').append(SysInfo.percent(SysInfo.cpu()))
+                .append(", ").append(avgText());
+        s.append(". ").append(Ui.tr("Memory")).append(' ').append(memoryText());
+        s.append(". ").append(Ui.tr("Storage")).append(' ').append(storageText());
         return s.toString();
     }
 

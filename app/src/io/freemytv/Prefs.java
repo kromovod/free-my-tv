@@ -247,7 +247,7 @@ final class Prefs {
         version++;
     }
 
-    /** The performance card and pill: the frame rate, the CPU load and the memory the home screen uses. */
+    /** The performance card and pill: the frame rate, the CPU load, the memory and the storage. */
     static boolean stats() { return sp().getBoolean("stats", true); }
     static void setStats(boolean on) { put("stats", on); }
 

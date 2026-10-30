@@ -202,6 +202,7 @@
   "Sony default": "Як задано Sony",
   "Sony default: the button opens what it always did.": "Як задано Sony: кнопка відкриває те саме, що й раніше.",
   "Starting…": "Запуск…",
+  "Storage": "Сховище",
   "Sunrise {time}": "Схід {time}",
   "Sunset {time}": "Захід {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "Перемикання — кілька секунд; екран блимає під час вимірювань.",
@@ -265,6 +266,7 @@
   "YouTube button": "Кнопка YouTube",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "Кнопками YouTube, Prime Video та Google Play керує сам телевізор.",
   "Your TV's home screen and screensaver": "Головний екран і заставка вашого телевізора",
+  "avg {n}%": "сер. {n}%",
   "debugging is off on the TV (port 5555 closed)": "налагодження на телевізорі вимкнено (порт 5555 закрито)",
   "debugging permission wasn't accepted on the TV": "на телевізорі не дозволено налагодження",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, вкладка {i} з {n}",
   "{n} GB": "{n} ГБ",
   "{n} MB": "{n} МБ",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} вільно",
   "{n} h": "{n} год",
   "{n} h ago": "{n} год тому",
   "{n} min": "{n} хв",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} мс",
   "{on} of {total}": "{on} з {total}",
   "{time} left": "залишилось {time}",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "Вийшла {version}: зберіть знову",
   "← → to move · OK to drop · Back to cancel": "← → перемістити · OK розмістити · Назад скасувати"
 }

@@ -1,13 +1,17 @@
 package io.freemytv;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.TrafficStats;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Environment;
+import android.os.StatFs;
 import android.os.SystemClock;
 
 import java.io.BufferedReader;
@@ -16,7 +20,8 @@ import java.util.Locale;
 
 /**
  * What the TV is doing right now, for the corner capsule and the drawer's card: the frame rate the home screen is
- * actually drawing at, the CPU load, the memory the app uses, and the Wi-Fi network it is on.
+ * actually drawing at, the CPU load (and its last minute, for the card's line), the memory the TV has and uses, the
+ * storage it has left, the network's speed, and the Wi-Fi network it is on.
  *
  * Everything here is read on the drawing thread and must stay cheap: /proc/stat and /proc/meminfo are a few hundred
  * bytes, and the SSID is cached for a minute (asking the Wi-Fi service costs a binder call). Nothing is fetched from
@@ -32,6 +37,10 @@ final class SysInfo {
 
     /** Called once per frame by HomeView: the frames in the last second, smoothed so the number doesn't flicker. */
     static void frame(long now) {
+        // A callback a few milliseconds after the one before it is the same screen frame delivered again (the
+        // Choreographer does that for callbacks posted with a delay): a TV never draws two frames that close.
+        if (now - lastFrameAt < 6) return;
+        lastFrameAt = now;
         frames++;
         if (windowStart == 0) windowStart = now;
         long span = now - windowStart;
@@ -45,7 +54,7 @@ final class SysInfo {
     }
 
     private static int frames;
-    private static long windowStart;
+    private static long windowStart, lastFrameAt;
 
     static int fps() {
         return Math.round(fps);
@@ -56,6 +65,19 @@ final class SysInfo {
     private static long lastCpuTicks = -1, lastCpuAt;
     private static volatile float cpu = 0;
     private static volatile boolean cpuUnreadable;
+    private static long tickAt;
+
+    /**
+     * Once a second, from the frame callback: the CPU's load, which the pill shows and the card keeps as a line. Read
+     * here and not where it's drawn: two reads a frame apart would measure nothing.
+     */
+    static void tick(long now) {
+        if (tickAt != 0 && now - tickAt < 1000) return;
+        long span = tickAt == 0 ? 0 : now - tickAt;
+        tickAt = now;
+        sampleCpu();
+        sampleTraffic(span);
+    }
 
     /**
      * The home screen's own CPU load since the last call, as a percentage of the whole chip (so one busy core on a
@@ -63,7 +85,7 @@ final class SysInfo {
      *
      * /proc/stat, the whole TV's load, is refused to apps on Android 11 (SELinux labels it proc_stat: only the shell and
      * the system may read it), so this reads /proc/self/stat instead: the process always may read its own. It pairs
-     * with the memory figure, which is the app's own too.
+     * with the pill's memory figure, which is the app's own too.
      */
     static void sampleCpu() {
         long now = SystemClock.elapsedRealtime();
@@ -80,6 +102,7 @@ final class SysInfo {
                 float seconds = (now - lastCpuAt) / 1000f;
                 float load = 100f * ((ticks - lastCpuTicks) / 100f) / seconds / cores();
                 cpu = Math.max(0, Math.min(100, load));
+                record(cpu);
             }
             lastCpuTicks = ticks;
             lastCpuAt = now;
@@ -88,6 +111,32 @@ final class SysInfo {
             if (!cpuUnreadable) AppLog.w("cpu: /proc/self/stat unreadable: " + e);
             cpuUnreadable = true;
         }
+    }
+
+    /** The CPU's load over the last minute, oldest first: what the card draws as a line. */
+    static final int HISTORY = 60;
+    private static final float[] history = new float[HISTORY];
+    private static int historyCount, historyNext;
+    private static float historySum;
+
+    private static void record(float load) {
+        if (historyCount == HISTORY) historySum -= history[historyNext];
+        else historyCount++;
+        history[historyNext] = load;
+        historySum += load;
+        historyNext = (historyNext + 1) % HISTORY;
+    }
+
+    /** Copies the history (oldest first) into `out`; returns how many values it holds (0 before the second reading). */
+    static int history(float[] out) {
+        int n = Math.min(historyCount, out.length), start = (historyNext - n + HISTORY) % HISTORY;
+        for (int i = 0; i < n; i++) out[i] = history[(start + i) % HISTORY];
+        return n;
+    }
+
+    /** The CPU's load over the last minute in percent, for the figure under the card's big one. */
+    static int cpuAverage() {
+        return historyCount == 0 ? cpu() : Math.round(historySum / historyCount);
     }
 
     private static int coreCount;
@@ -126,6 +175,89 @@ final class SysInfo {
         Runtime rt = Runtime.getRuntime();
         long used = rt.totalMemory() - rt.freeMemory();
         return used > 0 ? (int) Math.round(used / (1024.0 * 1024.0)) : -1;
+    }
+
+    // MARK: - What the TV has: its memory, its storage and the network's speed
+
+    private static final ActivityManager.MemoryInfo MEM = new ActivityManager.MemoryInfo();
+    private static long tvAt;
+    private static int memTotal = -1, memUsed = -1;
+    private static long storageFree = -1, storageTotal = -1;
+
+    /**
+     * The TV's memory (in use and in total) and the storage it has left, for the performance card. Read at most once a
+     * second and only while that card draws: the first two ask the system service, a binder call, and the card is
+     * redrawn on every frame of the drawer's animation.
+     */
+    static void sampleTv(Context c) {
+        long now = SystemClock.uptimeMillis();
+        if (tvAt != 0 && now - tvAt < 1000) return;
+        tvAt = now;
+        try {
+            ActivityManager am = c.getSystemService(ActivityManager.class);
+            if (am != null) {
+                am.getMemoryInfo(MEM);
+                memTotal = (int) (MEM.totalMem / (1024 * 1024));
+                memUsed = (int) ((MEM.totalMem - MEM.availMem) / (1024 * 1024));
+            }
+        } catch (Exception e) {
+            memTotal = memUsed = -1;
+        }
+        try {
+            StatFs fs = new StatFs(Environment.getDataDirectory().getPath());
+            storageFree = fs.getAvailableBytes() / (1024 * 1024);
+            storageTotal = fs.getTotalBytes() / (1024 * 1024);
+        } catch (Exception e) {
+            storageFree = storageTotal = -1;
+        }
+    }
+
+    /** The TV's own memory in MB, or -1 when unreadable. */
+    static int memTotalMb() {
+        return memTotal;
+    }
+
+    /** The TV's memory in use in MB, all apps included (not just this one), or -1 when unreadable. */
+    static int memUsedMb() {
+        return memUsed;
+    }
+
+    /** The storage left for apps and photos in MB, or -1 when unreadable. */
+    static long storageFreeMb() {
+        return storageFree;
+    }
+
+    static long storageTotalMb() {
+        return storageTotal;
+    }
+
+    private static long rx = -1, tx = -1;
+    private static float down = -1, up = -1;    // MB/s, since the last tick
+
+    /** The network's speed from the counters Android keeps: what came in and what went out since the last tick. */
+    private static void sampleTraffic(long spanMs) {
+        long r = TrafficStats.getTotalRxBytes(), t = TrafficStats.getTotalTxBytes();
+        if (r < 0 || t < 0) {    // some firmware doesn't count it (TrafficStats.UNSUPPORTED)
+            rx = tx = -1;
+            down = up = -1;
+            return;
+        }
+        if (rx >= 0 && tx >= 0 && spanMs > 0) {
+            down = (r - rx) / 1048576f / (spanMs / 1000f);
+            up = (t - tx) / 1048576f / (spanMs / 1000f);
+        }
+        rx = r;
+        tx = t;
+    }
+
+    /** What the TV received over the last second, in MB/s (-1 when unreadable and at the first reading). */
+    static float downMbs() {
+        return down;
+    }
+
+    /** What the TV sent over the last second, in MB/s. */
+    static float upMbs() {
+        return up;
     }
 
     // MARK: - Wi-Fi
@@ -256,5 +388,16 @@ final class SysInfo {
 
     static String fpsText(int v) {
         return String.format(Locale.ROOT, "%d FPS", v);
+    }
+
+    /** A figure with one decimal, in the viewer's language ("2.4", "18,6"). */
+    static String one(float v) {
+        return String.format(Ui.locale(), "%.1f", v);
+    }
+
+    /** A size in MB, as GB when it has at least one ("18.6 GB", "820 MB"). */
+    static String size(long mb) {
+        if (mb < 0) return "—";
+        return mb >= 1024 ? Ui.trf("{n} GB", "n", one(mb / 1024f)) : Ui.trf("{n} MB", "n", mb);
     }
 }

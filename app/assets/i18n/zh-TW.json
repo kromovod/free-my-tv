@@ -202,6 +202,7 @@
   "Sony default": "Sony 預設",
   "Sony default: the button opens what it always did.": "Sony 預設：按鈕會照常開啟原本指定的應用程式。",
   "Starting…": "正在啟動…",
+  "Storage": "儲存空間",
   "Sunrise {time}": "日出時間 {time}",
   "Sunset {time}": "日落時間 {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "切換需要幾秒鐘，測量期間螢幕可能會閃爍。",
@@ -265,6 +266,7 @@
   "YouTube button": "YouTube 按鈕",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube、Prime Video 和 Google Play：這些按鈕由電視本身控制。",
   "Your TV's home screen and screensaver": "電視的主畫面和螢幕保護程式",
+  "avg {n}%": "平均 {n}%",
   "debugging is off on the TV (port 5555 closed)": "電視已關閉偵錯功能（連接埠 5555 未開啟）",
   "debugging permission wasn't accepted on the TV": "電視尚未授予偵錯權限",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}，第 {i} 個索引標籤，共 {n} 個",
   "{n} GB": "{n} GB",
   "{n} MB": "{n} MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} 可用",
   "{n} h": "{n} 小時",
   "{n} h ago": "{n} 小時前",
   "{n} min": "{n} 分鐘",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} 毫秒",
   "{on} of {total}": "{on}/{total}",
   "{time} left": "剩餘 {time}",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "{version} 已推出：請重新建置",
   "← → to move · OK to drop · Back to cancel": "按 ← → 移動 · 按 OK 放置 · 按返回取消"
 }

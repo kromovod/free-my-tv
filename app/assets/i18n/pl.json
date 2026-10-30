@@ -202,6 +202,7 @@
   "Sony default": "Domyślne Sony",
   "Sony default: the button opens what it always did.": "Domyślne Sony: przycisk otwiera to, co zawsze.",
   "Starting…": "Uruchamianie…",
+  "Storage": "Miejsce",
   "Sunrise {time}": "Wschód {time}",
   "Sunset {time}": "Zachód {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "Przełączanie trwa kilka sekund; ekran migocze podczas pomiaru.",
@@ -265,6 +266,7 @@
   "YouTube button": "Przycisk YouTube",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video i Google Play: tymi przyciskami steruje sam telewizor.",
   "Your TV's home screen and screensaver": "Ekran główny i wygaszacz telewizora",
+  "avg {n}%": "śr. {n}%",
   "debugging is off on the TV (port 5555 closed)": "debugowanie w telewizorze jest wyłączone (port 5555 zamknięty)",
   "debugging permission wasn't accepted on the TV": "zgoda na debugowanie nie została zaakceptowana w telewizorze",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, karta {i} z {n}",
   "{n} GB": "{n} GB",
   "{n} MB": "{n} MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} wolne",
   "{n} h": "{n} godz.",
   "{n} h ago": "{n} godz. temu",
   "{n} min": "{n} min",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} ms",
   "{on} of {total}": "{on} z {total}",
   "{time} left": "zostało {time}",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "Jest wersja {version}: zbuduj ją ponownie",
   "← → to move · OK to drop · Back to cancel": "← → przesuwa · OK upuszcza · Wstecz anuluje"
 }

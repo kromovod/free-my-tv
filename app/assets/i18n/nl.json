@@ -202,6 +202,7 @@
   "Sony default": "Sony-standaard",
   "Sony default: the button opens what it always did.": "Sony-standaard: de knop opent wat hij altijd opende.",
   "Starting…": "Starten…",
+  "Storage": "Opslag",
   "Sunrise {time}": "Zonsopkomst {time}",
   "Sunset {time}": "Zonsondergang {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "Wisselen duurt even; het scherm knippert tijdens het meten.",
@@ -265,6 +266,7 @@
   "YouTube button": "YouTube-knop",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video en Google Play: de tv zelf bedient deze knoppen.",
   "Your TV's home screen and screensaver": "Startscherm en schermbeveiliging van je tv",
+  "avg {n}%": "gem. {n}%",
   "debugging is off on the TV (port 5555 closed)": "foutopsporing staat uit op de tv (poort 5555 dicht)",
   "debugging permission wasn't accepted on the TV": "toestemming voor foutopsporing is niet geaccepteerd op de tv",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, tabblad {i} van {n}",
   "{n} GB": "{n} GB",
   "{n} MB": "{n} MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} vrij",
   "{n} h": "{n} u",
   "{n} h ago": "{n} u geleden",
   "{n} min": "{n} min",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} ms",
   "{on} of {total}": "{on} van {total}",
   "{time} left": "nog {time}",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "{version} is uit: bouw hem opnieuw",
   "← → to move · OK to drop · Back to cancel": "← → verplaatsen · OK neerzetten · Terug annuleren"
 }

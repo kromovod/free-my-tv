@@ -202,6 +202,7 @@
   "Sony default": "Sonyn oletus",
   "Sony default: the button opens what it always did.": "Sonyn oletus: painike avaa saman kuin ennenkin.",
   "Starting…": "Käynnistetään…",
+  "Storage": "Tallennustila",
   "Sunrise {time}": "Aurinko nousee {time}",
   "Sunset {time}": "Aurinko laskee {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "Vaihto kestää muutaman sekunnin; näyttö välkkyy mittausten aikana.",
@@ -265,6 +266,7 @@
   "YouTube button": "YouTube-painike",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video ja Google Play: TV ohjaa itse näitä painikkeita.",
   "Your TV's home screen and screensaver": "Television aloitusnäyttö ja näytönsäästäjä",
+  "avg {n}%": "ka. {n}%",
   "debugging is off on the TV (port 5555 closed)": "vianetsintä on pois päältä televisiossa (portti 5555 suljettu)",
   "debugging permission wasn't accepted on the TV": "vianetsintälupaa ei hyväksytty televisiossa",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, välilehti {i}/{n}",
   "{n} GB": "{n} Gt",
   "{n} MB": "{n} Mt",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} vapaana",
   "{n} h": "{n} h",
   "{n} h ago": "{n} h sitten",
   "{n} min": "{n} min",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} ms",
   "{on} of {total}": "{on}/{total}",
   "{time} left": "{time} jäljellä",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "{version} on julkaistu: rakenna se uudelleen",
   "← → to move · OK to drop · Back to cancel": "← → siirrä · OK pudota · Takaisin peruuta"
 }

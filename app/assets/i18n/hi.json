@@ -202,6 +202,7 @@
   "Sony default": "Sony डिफ़ॉल्ट",
   "Sony default: the button opens what it always did.": "Sony डिफ़ॉल्ट: बटन वही खोलता है जो हमेशा खोलता था।",
   "Starting…": "शुरू हो रहा है…",
+  "Storage": "स्टोरेज",
   "Sunrise {time}": "सूर्योदय {time}",
   "Sunset {time}": "सूर्यास्त {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "बदलने में कुछ सेकंड लगते हैं; मापते समय स्क्रीन झपकती है।",
@@ -265,6 +266,7 @@
   "YouTube button": "YouTube बटन",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video और Google Play: ये बटन टीवी खुद नियंत्रित करता है।",
   "Your TV's home screen and screensaver": "आपके TV की होम स्क्रीन और स्क्रीनसेवर",
+  "avg {n}%": "औसत {n}%",
   "debugging is off on the TV (port 5555 closed)": "टीवी पर डीबगिंग बंद है (पोर्ट 5555 बंद)",
   "debugging permission wasn't accepted on the TV": "टीवी पर डीबगिंग की अनुमति स्वीकार नहीं हुई",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, टैब {i}/{n}",
   "{n} GB": "{n} GB",
   "{n} MB": "{n} MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} खाली",
   "{n} h": "{n} घं",
   "{n} h ago": "{n} घं पहले",
   "{n} min": "{n} मिनट",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} ms",
   "{on} of {total}": "{total} में से {on}",
   "{time} left": "{time} बाकी",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "{version} आ गया है: इसे फिर से बनाएँ",
   "← → to move · OK to drop · Back to cancel": "← → खिसकाएँ · OK छोड़ें · वापस रद्द करें"
 }

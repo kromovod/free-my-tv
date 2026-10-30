@@ -202,6 +202,7 @@
   "Sony default": "Sony varsayılanı",
   "Sony default: the button opens what it always did.": "Sony varsayılanı: tuş her zamanki gibi çalışır.",
   "Starting…": "Başlatılıyor…",
+  "Storage": "Depolama",
   "Sunrise {time}": "Gün doğumu {time}",
   "Sunset {time}": "Gün batımı {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "Geçiş birkaç saniye sürer; ölçüm sırasında ekran yanıp söner.",
@@ -265,6 +266,7 @@
   "YouTube button": "YouTube tuşu",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video ve Google Play: bu tuşları TV'nin kendisi yönetir.",
   "Your TV's home screen and screensaver": "TV'nin ana ekranı ve ekran koruyucusu",
+  "avg {n}%": "ort. {n}%",
   "debugging is off on the TV (port 5555 closed)": "TV'de hata ayıklama kapalı (5555 bağlantı noktası kapalı)",
   "debugging permission wasn't accepted on the TV": "TV'de hata ayıklama izni verilmedi",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, sekme {i}, toplam {n}",
   "{n} GB": "{n} GB",
   "{n} MB": "{n} MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} boş",
   "{n} h": "{n} sa",
   "{n} h ago": "{n} sa önce",
   "{n} min": "{n} dk",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} ms",
   "{on} of {total}": "{on}/{total}",
   "{time} left": "{time} kaldı",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "{version} çıktı: yeniden derleyin",
   "← → to move · OK to drop · Back to cancel": "← → taşı · OK bırak · Geri iptal"
 }

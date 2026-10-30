@@ -178,8 +178,9 @@ def load(lang):
 
 
 def save(lang, data):
-    with open(os.path.join(I18N, lang + ".json"), "w", encoding="utf-8") as f:
-        json.dump(dict(sorted(data.items())), f, ensure_ascii=False, indent=1)
+    path = os.path.join(I18N, lang + ".json")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:   # LF and 2 spaces, like the committed catalogues
+        json.dump(dict(sorted(data.items())), f, ensure_ascii=False, indent=2)
         f.write("\n")
 
 

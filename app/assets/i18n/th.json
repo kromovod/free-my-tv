@@ -202,6 +202,7 @@
   "Sony default": "ค่าเริ่มต้นของ Sony",
   "Sony default: the button opens what it always did.": "ค่าเริ่มต้นของ Sony: ปุ่มเปิดแอปเดิมตามปกติ",
   "Starting…": "กำลังเปิด…",
+  "Storage": "พื้นที่จัดเก็บ",
   "Sunrise {time}": "พระอาทิตย์ขึ้น {time}",
   "Sunset {time}": "พระอาทิตย์ตก {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "การสลับใช้เวลาสองสามวินาที หน้าจอจะกะพริบระหว่างวัดผล",
@@ -265,6 +266,7 @@
   "YouTube button": "ปุ่ม YouTube",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video และ Google Play: ทีวีควบคุมปุ่มเหล่านี้เอง",
   "Your TV's home screen and screensaver": "หน้าหลักและสกรีนเซฟเวอร์ของทีวี",
+  "avg {n}%": "เฉลี่ย {n}%",
   "debugging is off on the TV (port 5555 closed)": "การแก้ไขข้อบกพร่องปิดอยู่บนทีวี (พอร์ต 5555 ปิด)",
   "debugging permission wasn't accepted on the TV": "ทีวียังไม่ได้อนุญาตการแก้ไขข้อบกพร่อง",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, แท็บ {i} จาก {n}",
   "{n} GB": "{n} GB",
   "{n} MB": "{n} MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "เหลือ {n}",
   "{n} h": "{n} ชม.",
   "{n} h ago": "{n} ชม.ที่แล้ว",
   "{n} min": "{n} นาที",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} ms",
   "{on} of {total}": "{on} จาก {total}",
   "{time} left": "เหลือ {time}",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "{version} ออกแล้ว: บิลด์ใหม่อีกครั้ง",
   "← → to move · OK to drop · Back to cancel": "← → ย้าย · OK วาง · ย้อนกลับ ยกเลิก"
 }

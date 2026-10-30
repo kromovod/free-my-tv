@@ -202,6 +202,7 @@
   "Sony default": "Mặc định của Sony",
   "Sony default: the button opens what it always did.": "Mặc định của Sony: nút mở đúng ứng dụng như trước.",
   "Starting…": "Đang bắt đầu…",
+  "Storage": "Dung lượng",
   "Sunrise {time}": "Bình minh {time}",
   "Sunset {time}": "Hoàng hôn {time}",
   "Switching takes a few seconds; the screen blinks while it measures.": "Việc chuyển mất vài giây; màn hình nhấp nháy khi đo.",
@@ -265,6 +266,7 @@
   "YouTube button": "Nút YouTube",
   "YouTube, Prime Video and Google Play: the TV itself controls those buttons.": "YouTube, Prime Video và Google Play: TV tự điều khiển các nút này.",
   "Your TV's home screen and screensaver": "Màn hình chính và trình bảo vệ màn hình của TV",
+  "avg {n}%": "TB {n}%",
   "debugging is off on the TV (port 5555 closed)": "gỡ lỗi đang tắt trên TV (cổng 5555 đóng)",
   "debugging permission wasn't accepted on the TV": "quyền gỡ lỗi chưa được chấp nhận trên TV",
   "format|EEE": "EEE",
@@ -356,6 +358,8 @@
   "{name}, tab {i} of {n}": "{name}, thẻ {i} trên {n}",
   "{n} GB": "{n} GB",
   "{n} MB": "{n} MB",
+  "{n} MB/s": "{n} MB/s",
+  "{n} free": "{n} trống",
   "{n} h": "{n} giờ",
   "{n} h ago": "{n} giờ trước",
   "{n} min": "{n} phút",
@@ -364,6 +368,7 @@
   "{n} ms": "{n} ms",
   "{on} of {total}": "{on}/{total}",
   "{time} left": "còn {time}",
+  "{used} / {total} GB": "{used} / {total} GB",
   "{version} is out: build it again": "Đã có {version}: hãy build lại",
   "← → to move · OK to drop · Back to cancel": "← → di chuyển · OK đặt · Quay lại hủy"
 }
