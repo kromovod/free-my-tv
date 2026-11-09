@@ -5,6 +5,7 @@
     python3 webos/build.py --preview  # also leaves the files in out/webos/ to open index.html in a browser
     python3 webos/build.py --config other.properties
     python3 webos/build.py --generic  # without config.properties: the TV's time zone picks the city (releases)
+    python3 webos/build.py --hd       # at 1280 x 720, for LG TVs that aren't 4K (install.py does this by itself)
 
 Reads config.properties (the same file as the Android build), puts the web home screen (web/), the app's symbols
 and font (app/assets), the coin logos (app/res/drawable) and webos/appinfo.json together, and packs them the way LG's
@@ -78,7 +79,49 @@ def ar(members):
     return out.getvalue()
 
 
-def build(preview, config, generic=False):
+def ar_members(data):
+    """[(name, bytes)] of an ar archive, as ar() writes them."""
+    members, at = [], 8
+    while at + 60 <= len(data):
+        name, size = data[at:at + 16].decode('ascii').strip().rstrip('/'), int(data[at + 48:at + 58])
+        members.append((name, data[at + 60:at + 60 + size]))
+        at += 60 + size + size % 2
+    return members
+
+
+def _is_appinfo(name):
+    return name.startswith('usr/palm/applications/') and name.endswith('/appinfo.json') and name.count('/') == 4
+
+
+def resolution(ipk):
+    """The resolution an .ipk's appinfo.json asks for ('' if it has none)."""
+    for name, data in ar_members(ipk):
+        if name == 'data.tar.gz':
+            with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as tar:
+                for member in tar.getmembers():
+                    if _is_appinfo(member.name):
+                        return json.loads(tar.extractfile(member).read().decode('utf-8')).get('resolution', '')
+    return ''
+
+
+def with_resolution(ipk, size):
+    """The same .ipk asking for another resolution (install.py, for TVs that aren't 4K: #402)."""
+    members = []
+    for name, data in ar_members(ipk):
+        if name == 'data.tar.gz':
+            entries = []
+            with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as tar:
+                for member in tar.getmembers():
+                    body = None if member.isdir() else tar.extractfile(member).read()
+                    if _is_appinfo(member.name):
+                        body = json.dumps(dict(json.loads(body.decode('utf-8')), resolution=size), indent=2).encode('utf-8')
+                    entries.append((member.name, body))
+            data = tar_gz(entries)
+        members.append((name, data))
+    return ar(members)
+
+
+def build(preview, config, generic=False, hd=False):
     with open(os.path.join(ROOT, 'webos', 'appinfo.json'), encoding='utf-8') as f:
         info = json.load(f)
     app_id, version = info['id'], info['version']
@@ -90,6 +133,8 @@ def build(preview, config, generic=False):
     for name in ('appinfo.json', 'icon.png', 'largeIcon.png'):
         with open(os.path.join(ROOT, 'webos', name), 'rb') as f:
             app[name] = f.read()
+    if hd:   # Full HD and HD LGs draw apps at 1280 x 720; asked for 1920 x 1080, some show them in the top left (#402)
+        app['appinfo.json'] = json.dumps(dict(info, resolution='1280x720'), indent=2).encode('utf-8')
 
     base = 'usr/palm/applications/' + app_id
     entries = [('usr', None), ('usr/palm', None), ('usr/palm/applications', None), (base, None)]
@@ -130,7 +175,7 @@ def build(preview, config, generic=False):
     if preview:
         webapp.preview(app, OUT)
         print('Preview: open out/webos/index.html (or serve out/webos) in a browser.')
-    print('Built %s (%s %s, %d KB)' % (os.path.basename(IPK), app_id, version, len(data) // 1024))
+    print('Built %s (%s %s, %d KB%s)' % (os.path.basename(IPK), app_id, version, len(data) // 1024, ', 1280 x 720' if hd else ''))
     if apps:
         print('With the TV\'s app list from webos/apps.py (%d apps).' % len(apps))
     if not config['tmdbKey']:
@@ -138,4 +183,4 @@ def build(preview, config, generic=False):
 
 
 if __name__ == '__main__':
-    build('--preview' in sys.argv, webapp.config_from_args(sys.argv[1:]), '--generic' in sys.argv)
+    build('--preview' in sys.argv, webapp.config_from_args(sys.argv[1:]), '--generic' in sys.argv, '--hd' in sys.argv)

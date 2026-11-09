@@ -128,11 +128,11 @@
       <article class="feature" data-reveal>
         <div class="copy">
           <p class="kicker">Velocidade</p>
-          <h3>Clima e cotações a um toque.</h3>
-          <p>Aperte para baixo e veja a previsão, hora a hora ou dos próximos 5 dias, o nascer e o pôr do sol e as cotações de cripto ao vivo na sua moeda. A gaveta desliza a 60 quadros por segundo, todos no tempo certo, no chip modesto da própria TV.</p>
+          <h3>O clima a um toque.</h3>
+          <p>Aperte para baixo e veja a previsão, hora a hora ou dos próximos 5 dias, o nascer e o pôr do sol. A gaveta desliza a 60 quadros por segundo, todos no tempo certo, no chip modesto da própria TV.</p>
           <div class="hud" aria-hidden="true"><i></i><b>60 FPS</b><svg viewBox="0 0 120 24" preserveAspectRatio="none"><polyline id="spark" fill="none" points=""/></svg><span>16,6 ms</span></div>
         </div>
-        <div class="tv"><div class="screen"><video data-src="../assets/drawer.mp4" poster="../assets/drawer-poster.webp" muted loop playsinline preload="none" aria-label="A gaveta com o clima e as cotações de cripto abrindo"></video></div></div>
+        <div class="tv"><div class="screen"><video data-src="../assets/drawer.mp4" poster="../assets/drawer-poster.webp" muted loop playsinline preload="none" aria-label="A gaveta com o clima abrindo"></video></div></div>
       </article>
     </section>
 
@@ -281,7 +281,7 @@
             <li><b>Ferramentas:</b> um JDK (17+), as ferramentas de linha de comando do Android SDK e o adb. No Mac:
               <div class="code"><code>brew install --cask temurin android-commandlinetools android-platform-tools &amp;&amp; sdkmanager "build-tools;34.0.0" "platforms;android-34"</code><button class="copy-btn" type="button" aria-label="Copiar comando">Copiar</button></div>
             </li>
-            <li><b>Compilar:</b> a primeira execução cria o <em>config.properties</em>. Coloque sua cidade lá (e <em>currency=BRL</em> para as cotações em reais) e, para os destaques, uma <a href="https://www.themoviedb.org/settings/api" rel="noopener">chave grátis do TMDB</a>. Depois compile de novo.
+            <li><b>Compilar:</b> a primeira execução cria o <em>config.properties</em>. Coloque sua cidade lá e, para os destaques, uma <a href="https://www.themoviedb.org/settings/api" rel="noopener">chave grátis do TMDB</a>. Depois compile de novo.
               <div class="code"><code>git clone https://github.com/simbasjungles/free-my-tv &amp;&amp; cd free-my-tv &amp;&amp; ./build.sh</code><button class="copy-btn" type="button" aria-label="Copiar comando">Copiar</button></div>
             </li>
             <li><b>Instalar:</b>
@@ -299,7 +299,7 @@
             <li><b>Com o webOS Homebrew Channel:</b> adicione este repositório nos ajustes do Channel e instale o Free My TV pela lista dele (as atualizações também vêm por lá). Ele pega a sua cidade pelo fuso da TV; para os destaques, digite a sua chave grátis do TMDB em <em>Ajustes do Início</em> → <em>Chave do TMDB</em>.
               <div class="code"><code>https://freemytv.io/webos/apps.json</code><button class="copy-btn" type="button" aria-label="Copiar endereço">Copiar</button></div>
             </li>
-            <li><b>Ou compile no computador</b> com a sua cidade no <em>config.properties</em> (e <em>currency=BRL</em> para as cotações em reais), como na Google TV:
+            <li><b>Ou compile no computador</b> com a sua cidade no <em>config.properties</em>, como na Google TV:
               <div class="code"><code>git clone https://github.com/simbasjungles/free-my-tv &amp;&amp; cd free-my-tv &amp;&amp; python3 webos/build.py</code><button class="copy-btn" type="button" aria-label="Copiar comando">Copiar</button></div>
             </li>
             <li><b>Instalar o que você compilou:</b> digite a senha da TV quando ele pedir. O Free My TV abre na TV.
@@ -349,15 +349,16 @@
       </div>
       <div class="qs" data-reveal>
         <details><summary>É seguro?</summary><p>Ele usa os mesmos comandos das ferramentas de desenvolvedor do próprio Android, de dentro da TV. Nada de root, nada desinstalado: os apps só são desligados e voltam com um botão. Imagem, som, entradas, controle remoto, serviços do Google e Play Store ficam numa lista que ele nunca toca.</p></details>
+        <details><summary>Em quais TVs funciona?</summary><p>Google TV e Android TV do Android 8 em diante: TCL, Sony, Hisense, Philips, Xiaomi e outras, aparelhos como o Chromecast com Google TV e o onn 4K, e TVs LG e Samsung como app. O APK vai na TV, não no celular. Nas TVs Huawei (HarmonyOS) e no Fire TV ele fica como um app que você abre, e a TV mantém a tela inicial dela: numa Huawei, não troque.</p></details>
         <details><summary>Como eu volto ao original?</summary><p>Abra Free My TV → Início → Original. A tela inicial de fábrica, o protetor de tela e todos os apps voltam exatamente como estavam. Se a tela nova travar três vezes em cinco minutos, ele volta sozinho.</p></details>
         <details><summary>Muda a qualidade da imagem?</summary><p>Não. Os ajustes de imagem não são tocados e os vídeos passam pelo mesmo caminho no hardware. Medimos a mesma resolução e a mesma fonte de vídeo nos dois modos.</p></details>
         <details><summary>O que é desligado?</summary><p>A tela inicial e o protetor de tela de fábrica (substituídos), a tela de recuperação do Google TV, Play Games e YouTube Music e, nas TVs TCL, as mensagens, a demonstração de loja, o menu de hotel, os manuais e os apps de espelhamento e de registros (e os parecidos nas TVs Philco, Multilaser e NextStar). O Google Assistente só se você pedir no config.</p></details>
-        <details><summary>Funciona em TV LG?</summary><p>Funciona, do webOS 3 em diante. Ele é instalado pelo próprio Developer Mode da LG, ou pelo webOS Homebrew Channel, sem root e sem mudar nada na TV, e abre com um toque numa tecla numérica. A mesma tela inicial, com destaques, clima e cotações; para os destaques, digite a sua chave grátis do TMDB nos Ajustes do Início. Aperte EXTEND no app Developer Mode uma vez por mês para mantê-lo.</p></details>
-        <details><summary>Funciona em TV Samsung?</summary><p>Funciona, nas TVs Samsung de 2015 em diante. Ele é instalado pelo próprio Developer Mode da Samsung com o TizenBrew Installer, o instalador da comunidade (2017 em diante), ou compilado por você, sem root e sem mudar nada na TV. A mesma tela inicial, clima e cotações, com a sua cidade pelo fuso da TV. Para os destaques, digite a sua chave grátis do TMDB nos Ajustes do Início.</p></details>
-        <details><summary>Dá para deixar do meu jeito?</summary><p>Essa é a ideia. Abra a pasta no Claude Code e é só pedir: "coloque o Crunchyroll na prateleira", "mostre as cotações em reais", "configure para a minha Sony". Ele muda o código, compila o app e coloca na sua TV.</p></details>
+        <details><summary>Funciona em TV LG?</summary><p>Funciona, do webOS 3 em diante. Ele é instalado pelo próprio Developer Mode da LG, ou pelo webOS Homebrew Channel, sem root e sem mudar nada na TV, e abre com um toque numa tecla numérica. A mesma tela inicial, com destaques e clima; para os destaques, digite a sua chave grátis do TMDB nos Ajustes do Início. Aperte EXTEND no app Developer Mode uma vez por mês para mantê-lo.</p></details>
+        <details><summary>Funciona em TV Samsung?</summary><p>Funciona, nas TVs Samsung de 2015 em diante. Ele é instalado pelo próprio Developer Mode da Samsung com o TizenBrew Installer, o instalador da comunidade (2017 em diante), ou compilado por você, sem root e sem mudar nada na TV. A mesma tela inicial e o clima, com a sua cidade pelo fuso da TV. Para os destaques, digite a sua chave grátis do TMDB nos Ajustes do Início.</p></details>
+        <details><summary>Dá para deixar do meu jeito?</summary><p>Essa é a ideia. Abra a pasta no Claude Code e é só pedir: "coloque o Crunchyroll na prateleira", "deixe os desenhos fora dos destaques", "configure para a minha Sony". Ele muda o código, compila o app e coloca na sua TV.</p></details>
         <details><summary>Fica em português?</summary><p>Fica. O app segue o idioma da TV (português, inglês, espanhol, russo, alemão, francês, italiano, japonês e mais 18), ou o que você escolher nos ajustes dele. Quer outro idioma? Peça ao Claude.</p></details>
         <details><summary>Ele se atualiza sozinho?</summary><p>No Google TV e no Android TV, o APK pronto procura versão nova uma vez por semana e instala quando você der o OK, em <em>Ajustes do Início</em> → <em>Atualizações</em>. Na LG, o Homebrew Channel traz a versão nova; na Samsung, o TizenBrew Installer instala a última versão por cima da que você tem.</p></details>
-        <details><summary>Ele coleta algum dado?</summary><p>Não. Sem contas, sem análises, sem rastreamento. Ele só fala com o TMDB (destaques), o Open-Meteo (clima, da sua cidade) e a Binance (cotações), e com o Watchmode (links dos títulos) e o seu servidor do Plex só se você configurar. No Google TV e no Android TV, o APK pronto também pergunta ao GitHub uma vez por semana se há versão nova, e enquanto <em>Ajustes do Início</em> → <em>Chave do TMDB</em> mostra o QR code, a TV responde ao seu celular na rede de casa (uma chave, 5 minutos no máximo).</p></details>
+        <details><summary>Ele coleta algum dado?</summary><p>Não. Sem contas, sem análises, sem rastreamento. Ele só fala com o TMDB (destaques), o Open-Meteo (clima, da sua cidade), e com o Watchmode (links dos títulos), o seu servidor do Plex, o seu servidor Immich (suas fotos) e o Trakt (o que você está assistindo, no Google TV) só se você configurar; o login do Trakt fica na TV. O seu próprio Home Assistant só se você colocar o endereço dele e ligar os botões. No Google TV e no Android TV, o APK pronto também pergunta ao GitHub uma vez por semana se há versão nova, e enquanto <em>Ajustes do Início</em> → <em>Chave do TMDB</em> mostra o QR code, a TV responde ao seu celular na rede de casa (uma chave, 5 minutos no máximo).</p></details>
         <details><summary>É grátis?</summary><p>Sim. Licença MIT, e a chave do TMDB também é grátis.</p></details>
       </div>
     </section>
@@ -376,7 +377,7 @@
   <footer class="foot">
     <div class="brand"><img src="../assets/icon-512.png" alt="" width="24" height="24"><span>Free My TV</span></div>
     <p>Sem ligação com o Google, a TCL, a LG, a Samsung ou qualquer serviço de streaming; nomes e logos dos apps pertencem aos seus donos.</p>
-    <p>Este produto usa a API do TMDB, mas não é endossado nem certificado pelo TMDB. Dados do clima por <a href="https://open-meteo.com/" rel="noopener">Open-Meteo.com</a> (CC BY 4.0). Cotações da Binance. Links dos títulos por <a href="https://api.watchmode.com/" rel="noopener">Watchmode</a>. Ícones: Material Symbols. Fonte: Inter.</p>
+    <p>Este produto usa a API do TMDB, mas não é endossado nem certificado pelo TMDB. Dados do clima por <a href="https://open-meteo.com/" rel="noopener">Open-Meteo.com</a> (CC BY 4.0). Links dos títulos por <a href="https://api.watchmode.com/" rel="noopener">Watchmode</a>. Ícones: Material Symbols. Fonte: Inter.</p>
   </footer>
 
   <dialog class="film" id="film" aria-label="O filme do Free My TV">

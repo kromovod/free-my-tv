@@ -36,7 +36,7 @@ def write(sha256, size, ipk):
         'version': version,
         'type': 'web',
         'title': app['title'],
-        'appDescription': 'A fast, ad-free home screen: your apps on a glass shelf, the weather and prices, day and night.',
+        'appDescription': 'A fast, ad-free home screen: your apps on a glass shelf and the weather, day and night.',
         'iconUri': ICON,
         'sourceUrl': SOURCE,
         'rootRequired': False,

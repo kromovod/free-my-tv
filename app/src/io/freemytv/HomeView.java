@@ -3,8 +3,16 @@ package io.freemytv;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.bluetooth.BluetoothA2dp;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothHeadset;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
@@ -19,18 +27,26 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.hardware.usb.UsbManager;
 import android.media.tv.TvInputManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Build;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.os.UserHandle;
+import android.os.storage.StorageManager;
+import android.os.storage.StorageVolume;
 import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.view.Choreographer;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityManager;
@@ -56,7 +72,7 @@ import java.util.function.Consumer;
  *    buttons (Live TV, HDMI Inputs, Settings), with the focused one's name below it, and the live performance pill
  *    (frame rate, CPU and memory) at the right end of the tab row;
  *  - three cards with the titles recommended for right now in the selected tab (Recs, from TMDB); the background is
- *    the first card's photo, heavily blurred and almost white (Backdrop); without picks, one of your own photos
+ *    the focused card's photo, heavily blurred and almost white (Backdrop); without picks, one of your own photos
  *    (Photos) the same way, or else a light gradient;
  *  - at the bottom, the glass shelf with the apps (icons in each brand's color, like the tvOS Dock; the focused one
  *    grows);
@@ -95,14 +111,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final long TOAST_MS = 6000, FADE_MS = 800;
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
-    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, MENU = 8;
+    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, MENU = 8, RECENT = 9;
     private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
     private static final float L_TITLE_BASE = 130, L_TABBAR_TOP = 158, L_TABBAR_H = 68, L_CARDS_TOP = 262, L_CARD_H = 442;
     private static final float WATCH_GAP = 40;
-    private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103, L_CLOCK_GAP = 34;
+    private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103,
+            L_CLOCK_GAP = 34;
+    private static final float L_STATUS = 25, L_STATUS_GAP = 22;
+    private static final String[] STATUS_SYMBOLS = {"wifi", "ethernet", "bluetooth", "usb"};
     private static final float L_PLATTER_TOP = 814, L_TILE_H = 126;
     private static final float L_DATE_BASE = 330, L_CLOCK_BASE = 540, L_WEATHER_BASE = 626, L_QUOTES_BASE = 694;
     private static final int L_INK = 0xFF1D1D1F, L_DIM = 0xFF6E6E73, L_FAINT = 0xFF8E8E93;
@@ -118,21 +137,31 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final NowPlaying.Watch playing;
     private final Click click;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    /** The background follows the focused pick once it has been there this long (see bgFollow). */
+    private static final long BG_FOLLOW_MS = 500;
     private final SharedPreferences ui;
     private final TvInputManager tvInputs;
+    private final ConnectivityManager connectivity;
+    private final BluetoothAdapter bluetooth;
+    private boolean networkRegistered, devicesRegistered, mediaRegistered;
+    private int network;   // 0 = not connected, 1 = Wi-Fi, 2 = Ethernet
+    private boolean bluetoothConnected, usbConnected;
+    /** The status layer spans the screen while the icons are on (they sit at the left); off, it keeps its old width. */
+    private boolean statusWide;
     private final Spoken spoken = new Spoken(this, new Spoken.Source() {
         @Override public void items(List<Integer> out) { a11yItems(out); }
         @Override public String text(int id) { return a11yText(id); }
         @Override public boolean bounds(int id, Rect out) { return a11yBounds(id, out); }
         @Override public int focused() { return a11yFocused(); }
         @Override public void focus(int id) { a11yFocus(id); }
-        @Override public void click(int id) { activate(); }
+        @Override public void click(int id) { if (recentsOpen()) recents.openFocused(); else activate(); }
         @Override public boolean clickable(int id) { return (id - 1) / 1000 != WIDGETS; }
         @Override public boolean holdable(int id) { return a11yHolds(id); }
-        @Override public void hold(int id) { if (sheetOpen) a11yHold(); else if (canReorder()) startReorder(); else showMenu(); }
+        @Override public void hold(int id) { if (recentsOpen()) recents.closeFocused(); else if (sheetOpen) a11yHold(); else if (canReorder()) startReorder(); else showMenu(); }
     });
     private final RectF a11yRect = new RectF();
-    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer, menuLayer;
+    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer, menuLayer, recentLayer;
+    private RecentApps recents;
     private int zone = Z_SHELF;
 
     // Night look (like Apple's "Automatic" appearance): darker from sunset to sunrise, with a 2 s transition.
@@ -230,15 +259,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private int shelfFirst;
     private final int shelfVisible;
 
-    // Moving apps on the shelf (as on Apple TV): hold OK on a tile, then ← → move it, OK drops it, Back cancels. The
+    // Moving shelf apps or top buttons: hold OK, then ← → move it, OK drops it, Back cancels. The
     // lifted tile wiggles; the others slide to their new places (each slot's x offset is a spring that returns to 0).
     private static final long HOLD_MS = 500, WIGGLE_MS = 300;
     private static final float LIFT_GROW = 0.08f, WIGGLE_DEG = 1.5f;
-    private boolean reordering, reorderAnim, okHeld, holdArmed;
+    private boolean reordering, reorderTop, reorderAnim, okHeld, holdArmed;
+    private int orderRevision, pendingOrderSaves;
     private int liftIndex = -1;
     private long reorderAt;
     private float wiggle;
     private Spring[] tileSlide = new Spring[0];
+    private final Spring[] topSlide = new Spring[HomeApps.MAX_TOP];
     private final Spring moveLift = new Spring(0.3f, 0.72f, 0);
     private List<HomeApps.Item> reorderOrigin;
     private final Runnable holdStart = () -> { if (this.okDown && this.holdArmed) hold(); };
@@ -264,6 +295,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // Bottom drawer
     private List<HomeApps.Item> drawerItems = new ArrayList<>();
     private int drawerInputs;          // how many leading items are inputs (the rest are shortcuts)
+    private int drawerHome;            // where the Home Assistant tiles start (the list's size without them)
     private Spring[] drawerFocus = new Spring[0];
     private RectF[] drawerRects = new RectF[0];
     private final RectF weatherCard = new RectF(), quotesCard = new RectF();
@@ -305,6 +337,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private String weatherLineLanguage = "";
     private long clockMinute = -1;
     private boolean okDown, backDown;
+    private float touchX, touchY;
+    private final RectF hitBox = new RectF();   // the mouse's hit tests (menu rows, Continue Watching cards)
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp, dayLow;
@@ -388,6 +422,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 case DRAWER: drawDrawer(c); break;
                 case SHEET: drawSheet(c); break;
                 case MENU: drawMenu(c); break;
+                case RECENT: if (recents != null) recents.draw(c, w, h); break;
                 default: drawToast(c); break;
             }
             scene.setOffset(0, 0);
@@ -410,6 +445,157 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void reloadSoon() {
         handler.removeCallbacks(reloadSoon);
         handler.postDelayed(reloadSoon, 500);
+    }
+
+    private final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
+        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
+            setNetwork(caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ? 2
+                    : caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? 1 : 0);
+        }
+
+        @Override public void onLost(Network network) {
+            setNetwork(0);
+        }
+    };
+
+    /** Wi-Fi or Ethernet, for the icon at the top; none when the TV has no network. */
+    private void setNetwork(int type) {
+        if (type == network) return;
+        network = type;
+        status.invalidate();
+    }
+
+    private final BroadcastReceiver deviceCallback = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            updateDevices();
+        }
+    };
+
+    /** The drive broadcasts, in a filter of their own (see startStatus). */
+    private final BroadcastReceiver mediaCallback = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            updateDevices();
+        }
+    };
+
+    /**
+     * Bluetooth (when something is connected) and a USB drive, for the icons at the top. Only the audio profiles count:
+     * a Bluetooth remote is always connected, and its HID connection would keep the icon on for good. The queries go to
+     * LOADER: a Bluetooth remote that reconnects on the first key press after a while would otherwise pay for the
+     * profile states, the storage volumes and the binder calls on that very press.
+     */
+    private void updateDevices() {
+        LOADER.execute(() -> {
+            boolean bt = false;
+            try {
+                if (bluetooth != null && bluetooth.isEnabled()) {
+                    bt = bluetooth.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED
+                            || bluetooth.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED;
+                }
+            } catch (RuntimeException ignored) {
+            }
+            boolean drive = false;
+            try {
+                StorageManager sm = (StorageManager) getContext().getSystemService(Context.STORAGE_SERVICE);
+                if (sm != null) {
+                    for (StorageVolume v : sm.getStorageVolumes()) {
+                        // Only a mounted one: #192's unmounted drive doesn't show.
+                        if (v.isRemovable() && Environment.MEDIA_MOUNTED.equals(v.getState())) {
+                            drive = true;
+                            break;
+                        }
+                    }
+                }
+            } catch (RuntimeException ignored) {
+            }
+            boolean btOn = bt, driveOn = drive;
+            handler.post(() -> setDevices(btOn, driveOn));
+        });
+    }
+
+    private void setDevices(boolean bt, boolean drive) {
+        if (bt == bluetoothConnected && drive == usbConnected) return;
+        bluetoothConnected = bt;
+        usbConnected = drive;
+        status.invalidate();
+    }
+
+    /** Reads the icons' state and listens for changes only while the setting is on (nothing runs with it off). */
+    private void startStatus() {
+        if (!Prefs.statusIcons()) return;
+        updateDevices();
+        // The registration hands the current network over at once, so the first read is this callback. With no
+        // network at all it hands nothing, and the icon would keep the one from before the pause (Wi-Fi turned off).
+        if (connectivity != null && !networkRegistered) {
+            try {
+                if (connectivity.getActiveNetwork() == null) setNetwork(0);
+                connectivity.registerDefaultNetworkCallback(networkCallback, handler);
+                networkRegistered = true;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (!devicesRegistered) {
+            IntentFilter f = new IntentFilter();
+            f.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
+            f.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
+            f.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+            f.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+            // Headphones connect their link first and the audio a moment later; with a Bluetooth remote already
+            // connected the adapter's own state doesn't change then, so the profiles' broadcasts say it.
+            f.addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED);
+            f.addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED);
+            f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+            f.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+            try {
+                if (Build.VERSION.SDK_INT >= 33) getContext().registerReceiver(deviceCallback, f, Context.RECEIVER_NOT_EXPORTED);
+                else getContext().registerReceiver(deviceCallback, f);
+                devicesRegistered = true;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        // A mounted drive's broadcast carries a file:// URI: in the same filter as the Bluetooth actions it would make
+        // those never match (they have no data), so it gets a filter of its own.
+        if (!mediaRegistered) {
+            IntentFilter f = new IntentFilter();
+            f.addAction(Intent.ACTION_MEDIA_MOUNTED);
+            f.addAction(Intent.ACTION_MEDIA_UNMOUNTED);
+            f.addAction(Intent.ACTION_MEDIA_EJECT);
+            f.addAction(Intent.ACTION_MEDIA_REMOVED);
+            f.addDataScheme("file");
+            try {
+                if (Build.VERSION.SDK_INT >= 33) getContext().registerReceiver(mediaCallback, f, Context.RECEIVER_NOT_EXPORTED);
+                else getContext().registerReceiver(mediaCallback, f);
+                mediaRegistered = true;
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private void stopStatus() {
+        if (connectivity != null && networkRegistered) {
+            try {
+                connectivity.unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException ignored) {
+            }
+            networkRegistered = false;
+        }
+        if (devicesRegistered || mediaRegistered) {
+            // Registered once per filter, so unregistered once per filter.
+            if (devicesRegistered) {
+                try {
+                    getContext().unregisterReceiver(deviceCallback);
+                } catch (RuntimeException ignored) {
+                }
+                devicesRegistered = false;
+            }
+            if (mediaRegistered) {
+                try {
+                    getContext().unregisterReceiver(mediaCallback);
+                } catch (RuntimeException ignored) {
+                }
+                mediaRegistered = false;
+            }
+        }
     }
 
     private final Runnable tick = new Runnable() {
@@ -438,6 +624,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         shelfVisible = HomeApps.shelfVisible(a);
         ui = a.getSharedPreferences("home-ui", Context.MODE_PRIVATE);
         tvInputs = (TvInputManager) a.getSystemService(Context.TV_INPUT_SERVICE);
+        connectivity = (ConnectivityManager) a.getSystemService(Context.CONNECTIVITY_SERVICE);
+        BluetoothManager bm = (BluetoothManager) a.getSystemService(Context.BLUETOOTH_SERVICE);
+        bluetooth = bm == null ? null : bm.getAdapter();
         launcherApps = (LauncherApps) a.getSystemService(Context.LAUNCHER_APPS_SERVICE);
         try {
             if (launcherApps != null) launcherApps.registerCallback(packages, handler);
@@ -454,22 +643,25 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         sheetLayer = new Layer(a, SHEET);
         toastLayer = new Layer(a, TOAST);
         menuLayer = new Layer(a, MENU);
+        recentLayer = new Layer(a, RECENT);
         // Hardware layers on the GPU: only the one that changed is redrawn; moving, fading and scaling stay cheap.
         // Not on Android 8 to 11: on older GPUs (a Mi Box 3's Mali-450) redrawing and compositing a big layer on every
         // frame cost more than drawing straight to the screen (measured: focus on the picks 33 → 12 ms a frame, the
         // drawer 19 → 17 ms).
         for (View v : new View[] {heroLayer, status, platter, tiles, drawerLayer, sheetLayer}) v.setLayerType(Ui.LEGACY ? LAYER_TYPE_NONE : LAYER_TYPE_HARDWARE, null);
-        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, menuLayer, toastLayer}) {
+        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, menuLayer, toastLayer, recentLayer}) {
             v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);   // TalkBack reads the items (Spoken)
             addView(v);
         }
         setContentDescription("Free My TV");
+        recentLayer.setVisibility(INVISIBLE);
         drawerLayer.setVisibility(INVISIBLE);
         menuLayer.setVisibility(INVISIBLE);
         for (int i = 0; i < topFocus.length; i++) {
             topFocus[i] = new Spring(0.26f, 0.85f, 0);
             topRects[i] = new RectF();
         }
+        for (int i = 0; i < topSlide.length; i++) topSlide[i] = new Spring(0.32f, 0.86f, 0);
         for (int i = 0; i < Recs.MAX_CARDS; i++) {
             cardFocus[i] = new Spring(0.32f, 0.78f, 0);
             cardOpen[i] = new Spring(0.32f, 0.78f, i == 0 ? 1 : 0);
@@ -483,7 +675,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             heroLayer.invalidate();
             wake();
         });
-        setLightButtons(HomeApps.topButtons());
+        setLightButtons(HomeApps.topButtons(null));
         recs.setLight(true);
         checkNight(false);
         sheetLayer.setVisibility(INVISIBLE);
@@ -501,8 +693,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (running) return;
         running = true;
         checkNight(false);
-        boolean h24 = Prefs.clock24();
-        if (h24 != clock24) {   // 12/24 hours changed in the TV's settings: the clock and the drawer's times again
+        boolean h24 = Ui.h24();
+        if (h24 != clock24) {   // 12/24 hours changed (the TV's or the Clock row's): the clock and the drawer's times again
             clock24 = h24;
             clockMinute = -1;
             textPrefs = -1;
@@ -519,7 +711,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         data.refreshIfStale();
         recs.refreshIfStale();
         Photos.importInbox(getContext(), ownReady);   // photos a computer just sent
+        ImmichPhotos.syncIfDue(getContext(), ownReady);   // or a new choice from the Immich server, every 6 hours
         if (tvInputs != null) tvInputs.registerCallback(inputCallback, handler);
+        startStatus();
         handler.postDelayed(tick, 15_000);
         playing.start();
         checkNotices();
@@ -546,18 +740,22 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     void pause() {
         if (!running) return;
         running = false;
+        handler.removeCallbacks(bgFollow);
         cancelReorder(true);
+        if (recents != null) recents.closeNow();
         handler.removeCallbacks(holdStart);
         okHeld = holdArmed = false;
         closeMenu(true);
         Choreographer.getInstance().removeFrameCallback(this);
         handler.removeCallbacks(tick);
+        handler.removeCallbacks(homeTick);
         handler.removeCallbacks(reloadSoon);
         handler.removeCallbacks(bars);
         playing.stop();
         data.removeListener(this);
         recs.removeListener(this);
         if (tvInputs != null) tvInputs.unregisterCallback(inputCallback);
+        stopStatus();
     }
 
     void destroy() {
@@ -578,6 +776,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         wake();
         cancelReorder(!animated);
         closeMenu(!animated);
+        if (recents != null) recents.close();   // Home closes Recent Apps too (twice opens it: HomeActivity)
         zone = Z_SHELF;
         shelfIndex = 0;
         cardIndex = 0;
@@ -601,6 +800,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The round buttons at the top right (Settings > Top Buttons), with their names in the current language. */
     private void setLightButtons(List<HomeApps.Item> list) {
+        if (reorderTop) cancelReorder(true);
         lightButtons.clear();
         lightButtons.addAll(list);
         if (zone == Z_TOP && topIndex >= 3 + lightButtons.size()) {
@@ -647,7 +847,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float kk = width / 1920f;
         measure(sky, width, height);
         measure(heroLayer, width, Math.round(790 * kk));
-        measure(status, Math.round(1160 * kk), Math.round(240 * kk));
+        // The icons at the top left need the whole width; with them off the layer keeps its old size (the corner buttons
+        // only), so the GPU still composites a small layer.
+        statusWide = Prefs.statusIcons();
+        measure(status, statusWide ? width : Math.round(1160 * kk), Math.round(240 * kk));
         // Sized to what they draw (the glass and its shadow; the grown tiles and their shadows): smaller layers are
         // cheaper for the GPU to composite on every frame of the drawer animation.
         measure(platter, width, Math.round(320 * kk));
@@ -656,6 +859,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
         measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
+        measure(recentLayer, width, height);
         setMeasuredDimension(width, height);
     }
 
@@ -668,7 +872,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float kk = width / 1920f;
         sky.layout(0, 0, width, height);
         place(heroLayer, 0, 0);
-        place(status, width - status.getMeasuredWidth(), 0);
+        place(status, statusWide ? 0 : width - status.getMeasuredWidth(), 0);
         place(platter, 0, Math.round(750 * kk));
         place(tiles, 0, Math.round(790 * kk));
         place(drawerLayer, 0, Math.round(470 * kk));
@@ -677,6 +881,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         sheetLayer.setPivotX(width / 2f);
         sheetLayer.setPivotY(height / 2f);
         place(toastLayer, 0, 0);
+        recentLayer.layout(0, 0, width, height);
     }
 
     private static void place(View v, int x, int y) {
@@ -815,10 +1020,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
         settleWhileSliding();
         boolean tilesMoving = step(tileFocus, dt);
-        if (reorderAnim) tilesMoving |= stepReorder(dt, up);
+        boolean topReorderFrame = reorderTop && reorderAnim;
+        if (reorderAnim) {
+            boolean moving = stepReorder(dt, up);
+            if (!topReorderFrame) tilesMoving |= moving;
+        }
         boolean statusMoving = step(statusFocus, dt);
         boolean heroMoving = heroFocus.step(dt);
-        boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt) | step(cardOpen, dt) | cardScroll.step(dt)
+        boolean topMoving = step(topFocus, dt) | topReorderFrame, cardsMoving = step(cardFocus, dt) | step(cardOpen, dt) | cardScroll.step(dt)
                 | step(watchFocus, dt) | watchScroll.step(dt);
         boolean tintMoving = tintMix.step(dt);
         if (tintMoving) {
@@ -841,6 +1050,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean menuMoving = menu.step(dt) | menuPick.step(dt);
         if (menuMoving || nightMoving && menuOpen) menuLayer.invalidate();
         else if (!menuOpen && menuLayer.getVisibility() == VISIBLE) menuLayer.setVisibility(INVISIBLE);
+        boolean recentMoving = recents != null && recents.step(dt);
+        if (recents != null) {
+            if (recents.visible() != (recentLayer.getVisibility() == VISIBLE)) recentLayer.setVisibility(recents.visible() ? VISIBLE : INVISIBLE);
+            if (recentMoving) recentLayer.invalidate();   // idle, the cards are drawn once
+            setUnderRecents(recents.covering());
+        }
 
         if (drawerMoving || sheetMoving || motionDirty) updateMotion();
         // Opening and closing the drawer only moves the cached layers: redrawing the glass on every frame made the TV
@@ -869,10 +1084,28 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // Busy: something is moving, or the sheet or the drawer is open.
         boolean busy = tilesMoving || statusMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving
                 || menuMoving || sheetMoving || toastFading || heroFading || bgFading || nightMoving || tintMoving || sheetOpen
-                || sheet.value > 0.001f || drawerOpen || drawer.value > 0.001f || toast != null || !toasts.isEmpty();
+                || sheet.value > 0.001f || recentMoving || drawerOpen || drawer.value > 0.001f || toast != null || !toasts.isEmpty();
         idle = !busy;
         if (busy) Choreographer.getInstance().postFrameCallback(this);
         else Choreographer.getInstance().postFrameCallbackDelayed(this, 1000);
+    }
+
+    private final int[] underState = new int[9];
+    private boolean underHidden;
+
+    /** Recent Apps covers the screen: the layers below aren't drawn (on slower TVs they cost more than the cards). */
+    private void setUnderRecents(boolean covered) {
+        if (covered == underHidden) return;
+        underHidden = covered;
+        View[] under = {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, menuLayer, toastLayer};
+        for (int i = 0; i < under.length; i++) {
+            if (covered) {
+                underState[i] = under[i].getVisibility();
+                under[i].setVisibility(INVISIBLE);
+            } else {
+                under[i].setVisibility(underState[i]);
+            }
+        }
     }
 
     private void wake() {
@@ -1640,7 +1873,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 top = i;
             }
         }
-        if (liftIndex >= 0 && liftIndex < shelf.size() && moveLift.value > 0.02f) top = liftIndex;
+        if (!reorderTop && liftIndex >= 0 && liftIndex < shelf.size() && moveLift.value > 0.02f) top = liftIndex;
         int last = Math.min(shelf.size(), shelfFirst + shelfVisible);
         // Scrolling, tiles slide in and out through the glass's sides (only those that show any part are drawn). Only
         // then: on a shelf that fits, the clip would cut the end tiles' shadows in a straight line.
@@ -1657,7 +1890,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 // Moving apps: the tile slides from where it was and the lifted one wiggles (only then: no extra work
                 // otherwise).
                 float dx = i < tileSlide.length ? tileSlide[i].value : 0;
-                float angle = i == liftIndex ? wiggle * moveLift.value : 0;
+                float angle = !reorderTop && i == liftIndex ? wiggle * moveLift.value : 0;
                 if (dx == 0 && angle == 0) {
                     drawShelfTile(c, i);
                     continue;
@@ -1691,7 +1924,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void drawShelfTile(Canvas c, int i) {
         HomeApps.Item it = shelf.get(i);
         // Lifted to be moved: a little bigger than focused, with a deeper shadow.
-        float l = i == liftIndex ? Math.max(0, moveLift.value) : 0;
+        float l = !reorderTop && i == liftIndex ? Math.max(0, moveLift.value) : 0;
         float f = tileFocus[i].value, fc = Ui.clamp(f), s = 1 + FOCUS_GROW * f + LIFT_GROW * l;
         RectF base = tileRects[i];
         float bw = base.width(), bh = base.height(), r0 = TILE_RADIUS * k;
@@ -1822,6 +2055,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static List<HomeApps.Item> drawerList(Context c) {
         List<HomeApps.Item> list = HomeApps.allInputs(c);
         list.addAll(HomeApps.drawerShortcuts(c));
+        list.addAll(HomeAssistant.items(c));   // empty unless configured and on in Home Settings
         return list;
     }
 
@@ -1832,8 +2066,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = 0; same && i < list.size(); i++) {
             same = list.get(i).key.equals(drawerItems.get(i).key) && list.get(i).connected == drawerItems.get(i).connected;
         }
+        int home = inputs;
+        while (home < list.size() && list.get(home).kind != HomeApps.HOME_ASSISTANT) home++;
         drawerItems = list;
         drawerInputs = inputs;
+        drawerHome = home;
         if (drawerFocus.length != list.size()) {
             drawerFocus = new Spring[list.size()];
             drawerRects = new RectF[list.size()];
@@ -1852,11 +2089,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         int n = drawerItems.size();
         float left = MARGIN * k, right = CONTENT_R * k;
         float gap = 18 * k, groupGap = 56 * k;
-        int groups = drawerInputs > 0 && drawerInputs < n ? 2 : 1;
+        int groups = Math.max(1, (drawerInputs > 0 ? 1 : 0) + (drawerHome > drawerInputs ? 1 : 0) + (n > drawerHome ? 1 : 0));
         float tw = Math.min(230 * k, (right - left - Math.max(0, n - groups) * gap - (groups - 1) * groupGap) / Math.max(1, n));
         float x = left, top = ROW_TOP * k;
         for (int i = 0; i < n; i++) {
-            if (i == drawerInputs && i > 0) x += groupGap - gap;
+            if ((i == drawerInputs || i == drawerHome) && i > 0) x += groupGap - gap;
             drawerRects[i].set(x, top, x + tw, top + ROW_H * k);
             snap(drawerRects[i]);
             x += tw + gap;
@@ -1888,6 +2125,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawerIndex = shelf.isEmpty() ? 0 : nearest(drawerRects, tileRects[shelfIndex].centerX());
         for (int i = 0; i < drawerFocus.length; i++) drawerFocus[i].snap(i == drawerIndex ? 1 : 0);
         drawerDirty = true;
+        readHome();
     }
 
     private void closeDrawer() {
@@ -1895,7 +2133,48 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawer.target = 0;
         zone = Z_SHELF;
         for (Spring f : drawerFocus) f.snap(0);   // the drawer goes away: its focus doesn't need to animate
+        handler.removeCallbacks(homeTick);
         if (!shelf.isEmpty() && drawerIndex < drawerRects.length) shelfIndex = nearest(tileRects, drawerRects[drawerIndex].centerX());
+    }
+
+    // MARK: - Home Assistant tiles
+
+    /** Reads the tiles' states now and every HomeAssistant.REFRESH_MS while the drawer is open. */
+    private final Runnable homeTick = this::readHome;
+
+    private void readHome() {
+        handler.removeCallbacks(homeTick);
+        if (!running || !drawerOpen || drawerHome >= drawerItems.size()) return;
+        HomeAssistant.refresh(getContext(), this::homeChanged);
+        handler.postDelayed(homeTick, HomeAssistant.REFRESH_MS);
+    }
+
+    /** A state or a name changed: the tiles are drawn again (and TalkBack reads the new state). */
+    private void homeChanged() {
+        // A cover shows once its class is read, and a garage door or a gate goes: then the tiles themselves change.
+        List<HomeApps.Item> tiles = HomeAssistant.itemsNow(getContext());
+        boolean same = tiles.size() == drawerItems.size() - drawerHome;
+        for (int i = 0; same && i < tiles.size(); i++) same = tiles.get(i).key.equals(drawerItems.get(drawerHome + i).key);
+        if (!same) {
+            List<HomeApps.Item> list = new ArrayList<>(drawerItems.subList(0, drawerHome));
+            list.addAll(tiles);
+            setDrawerItems(list);
+        }
+        for (int i = drawerHome; i < drawerItems.size(); i++) {
+            HomeApps.Item it = drawerItems.get(i);
+            if (it.control != null) it.label = it.control.name;
+        }
+        drawerDirty = true;
+        wake();
+    }
+
+    private void pressHome(HomeApps.Item it) {
+        if (it.control == null) return;
+        HomeAssistant.activate(getContext(), it.control, ok -> {
+            if (!ok) showToast(Ui.tr("Couldn't reach Home Assistant."));
+            homeChanged();
+        });
+        homeChanged();   // a light shows its new state at once
     }
 
     /** Color for the drawer's text and symbols: dark by day, white at night. */
@@ -1936,7 +2215,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         cardValue.setColor(drawerInk(0.98f));
         float titleBase = ROW_TITLE * k;
         if (drawerInputs > 0) c.drawText(Ui.tr("Inputs"), drawerRects[0].left + 4 * k, titleBase, rowTitle);
-        if (drawerInputs < drawerItems.size()) c.drawText(Ui.tr("Shortcuts"), drawerRects[drawerInputs].left + 4 * k, titleBase, rowTitle);
+        if (drawerInputs < drawerHome) c.drawText(Ui.tr("Shortcuts"), drawerRects[drawerInputs].left + 4 * k, titleBase, rowTitle);
+        if (drawerHome < drawerItems.size()) c.drawText("Home Assistant", drawerRects[drawerHome].left + 4 * k, titleBase, rowTitle);
         int top = -1;
         for (int i = 0; i < drawerItems.size(); i++) if (drawerFocus[i].value > 0.02f && (top < 0 || drawerFocus[i].value > drawerFocus[top].value)) top = i;
         for (int i = 0; i < drawerItems.size(); i++) if (i != top) drawDrawerTile(c, i);
@@ -1965,7 +2245,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             fill.setColor(Ui.alpha(WHITE, f));
             c.drawRoundRect(cell, r, r, fill);
         }
-        boolean off = it.kind == HomeApps.INPUT && !it.connected;
+        boolean off = it.kind == HomeApps.INPUT && !it.connected
+                || it.kind == HomeApps.HOME_ASSISTANT && it.control != null && !it.control.on();
         int ink = blend(tone(off ? 0xFF8E8E93 : L_INK, off ? 0x6BFFFFFF : 0xF2FFFFFF), INK, f);
         Symbols.draw(getContext(), c, it.symbol, cx, cell.top + cell.height() * 0.4f, 34 * k * s, ink);
         drawerLabel.setColor(ink);
@@ -2287,6 +2568,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         heroChanged |= cardScroll.target != scrollTo;
         cardScroll.target = scrollTo;
         if (snap) cardScroll.snap(scrollTo);
+        if (picksMode() && !cards.isEmpty()) {
+            handler.removeCallbacks(bgFollow);
+            handler.postDelayed(bgFollow, BG_FOLLOW_MS);
+        }
         heroChanged |= aim(watchFocus, !sheetOpen && zone == Z_WATCH ? watchIndex : -1, snap);
         updateTint();
         // The row scrolls so the focused card is at most the third one on screen.
@@ -2532,6 +2817,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void reload() {
         final Context c = getContext().getApplicationContext();
+        final int orderAtLoad = orderRevision;
         // The shelf and All Apps (100 to 500 ms of package queries on a TV) only when they can have changed.
         long up = SystemClock.uptimeMillis();
         final boolean apps = appsStale || Prefs.version != appsVersion || Ui.generation != appsGeneration
@@ -2547,15 +2833,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             final List<HomeApps.Item> st = statusList(c);
             final List<HomeApps.Item> d = drawerList(c);
             final List<HomeApps.Item> o = apps ? HomeApps.others(c) : null;
-            final List<HomeApps.Item> top = apps ? HomeApps.topButtons() : null;   // they change with Prefs too
+            final List<HomeApps.Item> top = apps ? HomeApps.topButtons(c) : null;   // they change with Prefs too
             // Only read when it's shown: with the picks or the clock, Continue Watching costs nothing.
             final String mode = Prefs.topContent();
             final boolean allowed = WatchNext.allowed(c);
             final List<WatchNext.Item> w = mode.equals(Prefs.TOP_CONTINUE) ? WatchNext.load(c) : new ArrayList<>();
             handler.post(() -> {
-                if (top != null) setLightButtons(top);
+                // A provider/package refresh must not cancel a drag or undo a move that was just saved.
+                boolean keepOrder = reordering || pendingOrderSaves > 0 || orderAtLoad != orderRevision;
+                if (top != null && !keepOrder) setLightButtons(top);
                 setTopContent(mode, w, allowed);
-                if (s != null) setShelf(s);
+                if (s != null && !keepOrder) setShelf(s);
+                if (apps && keepOrder) appsStale = true;
                 setStatusItems(st);
                 setDrawerItems(d);
                 if (o != null && !sheetOpen) setOthers(o);
@@ -2580,10 +2869,315 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     // MARK: - Keys: only the arrows, OK, Back and Settings (system keys pass through to the system)
 
+    /** A mouse (or a touch screen) clicks what is under it, like OK on the focused item. */
+    @Override public boolean onTouchEvent(MotionEvent e) {
+        switch (e.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                touchX = e.getX();
+                touchY = e.getY();
+                return true;
+            case MotionEvent.ACTION_UP:
+                if (Math.hypot(e.getX() - touchX, e.getY() - touchY) < 24 * k) tap(e.getX(), e.getY());
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    /** A mouse moves the focus to what is under the pointer, like a trackpad on tvOS. */
+    @Override public boolean onHoverEvent(MotionEvent e) {
+        if (e.getActionMasked() == MotionEvent.ACTION_HOVER_MOVE) hover(e.getX(), e.getY());
+        return true;
+    }
+
+    /** The mouse wheel moves through the shelf, the cards, the drawer and All Apps. */
+    @Override public boolean onGenericMotionEvent(MotionEvent e) {
+        if (e.getActionMasked() == MotionEvent.ACTION_SCROLL) {
+            float v = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
+            if (v != 0) {
+                wheel(v < 0 ? 1 : -1);
+                return true;
+            }
+        }
+        return super.onGenericMotionEvent(e);
+    }
+
+    /**
+     * The item the pointer was last over (zone * 1000 + index, -1: none). Hover moves the focus only when the pointer
+     * comes onto another item, as LG's mouseover does: a resting pointer nudged by a hand (an air mouse) doesn't pull
+     * the focus back from where the arrows took it.
+     */
+    private int hovered = -1;
+    private static final int H_MENU = 7, H_GRID = 8;   // hover's codes for the menu's rows and All Apps' cells
+
+    /** True when the pointer has just come onto (zone, index); index -1 (nothing there) only forgets the last one. */
+    private boolean entered(int zone, int index) {
+        int code = index < 0 ? -1 : zone * 1000 + index;
+        if (code == hovered) return false;
+        hovered = code;
+        return code >= 0;
+    }
+
+    private void hover(float x, float y) {
+        wake();
+        if (reordering) return;
+        if (menuOpen) {   // only the menu's rows: what's behind it stays as it was
+            int row = menuAt(x, y);
+            if (entered(H_MENU, row)) moveMenu(row - menuIndex);
+            return;
+        }
+        if (sheetOpen) {
+            int hit = gridAt(x, y, true);
+            if (entered(H_GRID, hit) && hit != gridIndex) {
+                gridIndex = hit;
+                retargetGrid(false);
+                gridDirty = true;
+            }
+            return;
+        }
+        if (drawerOpen) {
+            int hit = hit(drawerRects, x, y);
+            if (entered(Z_DRAWER, hit) && (zone != Z_DRAWER || drawerIndex != hit)) {
+                zone = Z_DRAWER;
+                drawerIndex = hit;
+                retarget(false);
+            }
+            return;
+        }
+        int z = Z_TOP, hit = topAt(x, y);
+        if (hit < 0) {
+            z = Z_CARDS;
+            hit = cardAt(x, y, true);
+        }
+        if (hit < 0) {
+            z = Z_WATCH;
+            hit = watchAt(x, y, true);
+        }
+        if (hit < 0) {
+            z = Z_SHELF;
+            hit = tileAt(x, y);
+        }
+        if (!entered(z, hit)) return;
+        int now = zone == Z_TOP ? topIndex : zone == Z_CARDS ? cardIndex : zone == Z_WATCH ? watchIndex : shelfIndex;
+        if (zone == z && now == hit) return;
+        zone = z;
+        if (z == Z_TOP) {
+            topIndex = hit;
+            if (hit < 3) selectTab(hit);   // as with the arrows (and on LG): focusing a tab selects it
+        } else if (z == Z_CARDS) {
+            cardIndex = hit;
+        } else if (z == Z_WATCH) {
+            watchIndex = hit;
+        } else {
+            shelfIndex = hit;
+        }
+        retarget(false);
+    }
+
+    private void wheel(int dir) {
+        wake();
+        if (reordering) return;   // the arrows move the lifted app; the wheel would move the focus off it
+        if (menuOpen) {
+            moveMenu(dir);
+        } else if (sheetOpen) {
+            int next = Math.max(0, Math.min(others.size() - 1, gridIndex + dir * COLUMNS));
+            if (next != gridIndex) {
+                gridIndex = next;
+                retargetGrid(false);
+                gridDirty = true;
+            }
+        } else if (drawerOpen) {
+            int next = Math.max(0, Math.min(drawerItems.size() - 1, drawerIndex + dir));
+            if (next != drawerIndex) {
+                zone = Z_DRAWER;
+                drawerIndex = next;
+                retarget(false);
+            }
+        } else if (zone == Z_CARDS && !cards.isEmpty()) {
+            int next = Math.max(0, Math.min(cards.size() - 1, cardIndex + dir));
+            if (next != cardIndex) {
+                cardIndex = next;
+                retarget(false);
+            }
+        } else if (zone == Z_WATCH && !watching.isEmpty()) {
+            int next = Math.max(0, Math.min(watching.size() - 1, watchIndex + dir));
+            if (next != watchIndex) {
+                watchIndex = next;
+                retarget(false);
+            }
+        } else if (!shelf.isEmpty()) {
+            int next = Math.max(0, Math.min(shelf.size() - 1, shelfIndex + dir));
+            if (next != shelfIndex) {
+                zone = Z_SHELF;
+                shelfIndex = next;
+                retarget(false);
+            }
+        }
+    }
+
+    private void tap(float x, float y) {
+        wake();
+        if (reordering) return;
+        if (menuOpen) {   // a click on a row picks it; anywhere else closes the menu (never what's behind it)
+            int row = menuAt(x, y);
+            if (row < 0) {
+                closeMenu(false);
+                click.move();
+                return;
+            }
+            menuIndex = row;
+            menuPick.target = row;
+            pickMenu();
+            return;
+        }
+        if (sheetOpen) {
+            int hit = gridAt(x, y, false);
+            if (hit >= 0) {
+                gridIndex = hit;
+                retargetGrid(false);
+                click.move();
+                gridDirty = true;
+                activate();
+            }
+            return;
+        }
+        if (drawerOpen) {
+            int hit = hit(drawerRects, x, y);
+            if (hit >= 0) {
+                zone = Z_DRAWER;
+                drawerIndex = hit;
+                retarget(false);
+                activate();
+            }
+            return;
+        }
+        int hit = topAt(x, y);
+        if (hit >= 0) {
+            zone = Z_TOP;
+            topIndex = hit;
+            retarget(false);
+            activate();
+            return;
+        }
+        hit = cardAt(x, y, false);
+        if (hit >= 0) {
+            zone = Z_CARDS;
+            cardIndex = hit;
+            retarget(false);
+            activate();
+            return;
+        }
+        hit = watchAt(x, y, false);
+        if (hit >= 0) {
+            zone = Z_WATCH;
+            watchIndex = hit;
+            retarget(false);
+            activate();
+            return;
+        }
+        hit = tileAt(x, y);
+        if (hit >= 0) {
+            zone = Z_SHELF;
+            shelfIndex = hit;
+            retarget(false);
+            activate();
+        }
+    }
+
+    /** The menu's row under a point, if any. */
+    private int menuAt(float x, float y) {
+        for (int i = 0; i < menuOptions.length; i++) {
+            menuRow(i, hitBox);
+            if (hitBox.contains(x, y)) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * The tab or round button under a point: the tabs only with the picks, and only the buttons there now (a shorter
+     * list leaves the old places of the others in topRects).
+     */
+    private int topAt(float x, float y) {
+        int hit = hit(topRects, x, y);
+        return hit >= 3 + lightButtons.size() || hit >= 0 && hit < 3 && !picksMode() ? -1 : hit;
+    }
+
+    /**
+     * The picks' card under a point, if any. Hovering (`still`) only takes a card that keeps its row where it is: the
+     * row scrolls so the focused card is the third (retarget), so hovering the one peeking in at the edge, or the first
+     * one of a scrolled row, would slide the next one under the pointer, and the focus would run along the row as the
+     * pointer moves. A click takes any card.
+     */
+    private int cardAt(float x, float y, boolean still) {
+        int hit = hit(cardRects, x, y);
+        if (hit < 0 || hit >= cards.size()) return -1;
+        return still && Math.max(0, hit - 2) != cardScroll.target ? -1 : hit;
+    }
+
+    /** The Continue Watching card under a point, if any (only the ones on screen; `still` as in cardAt). */
+    private int watchAt(float x, float y, boolean still) {
+        if (!continueMode()) return -1;
+        for (int i = 0; i < watching.size(); i++) {
+            watchRect(i, hitBox);
+            if (hitBox.left > w || hitBox.right <= watchLeftEdge()) continue;
+            if (!hitBox.contains(x, y)) continue;
+            return still && Math.max(0, Math.min(i - 2, watching.size() - 3)) != watchScroll.target ? -1 : i;
+        }
+        return -1;
+    }
+
+    /**
+     * The shelf tile under a point, if any: only the ones on screen. The next tile's place is just past the glass, at the
+     * screen's edge, and a pointer resting there would scroll the shelf one app at a time to its end.
+     */
+    private int tileAt(float x, float y) {
+        int last = Math.min(tileRects.length, shelfFirst + Math.min(shelf.size(), shelfVisible));
+        for (int i = shelfFirst; i < last; i++) if (tileRects[i].contains(x, y)) return i;
+        return -1;
+    }
+
+    private static int hit(RectF[] rects, float x, float y) {
+        for (int i = 0; i < rects.length; i++) if (!rects[i].isEmpty() && rects[i].contains(x, y)) return i;
+        return -1;
+    }
+
+    /**
+     * The All Apps cell under a point, if any (the sheet's own layout, scrolled). Hovering (`still`) only takes the
+     * rows on screen: a row peeks in at the bottom (and at the top once scrolled), and focusing it would scroll the
+     * next one under the pointer (retargetGrid's rows).
+     */
+    private int gridAt(float x, float y, boolean still) {
+        float gridWidth = COLUMNS * GRID_W + (COLUMNS - 1) * GRID_GAP;
+        float left = (1920 - gridWidth) / 2 * k, top = GRID_TOP * k - scroll.value * GRID_ROW * k;
+        float cw = GRID_W * k, ch = GRID_H * k, gap = GRID_GAP * k, row = GRID_ROW * k;
+        for (int i = 0; i < others.size(); i++) {
+            int r = i / COLUMNS, col = i % COLUMNS;
+            float x0 = left + col * (cw + gap), y0 = top + r * row;
+            if (x >= x0 && x < x0 + cw && y >= y0 && y < y0 + ch) {
+                if (still && (r < scroll.target || r > scroll.target + VISIBLE_ROWS - 1)) return -1;
+                focusedCell.set(x0, y0, x0 + cw, y0 + ch);
+                return i;
+            }
+        }
+        return -1;
+    }
+
     boolean onKey(KeyEvent e) {
         wake();
         if (menuOpen) return menuKey(e);
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        if (recents != null && recents.isOpen()) {   // not as it fades out: an OK or ▲ then is the home screen's, not a card's
+            int was = recents.focus();
+            boolean handled = recents.key(e);
+            recentLayer.invalidate();
+            if (recents.focus() != was) spoken.focusMoved();
+            if (!recents.visible() || recents.count() == 0) spoken.readAgain();
+            return handled;
+        }
+        if (down && e.getKeyCode() == KeyEvent.KEYCODE_APP_SWITCH && !Prefs.recents().equals("off")) {
+            openRecents();
+            return true;
+        }
         if (reordering) return reorderKey(e, down);
         int code = e.getKeyCode();
         if (down && code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER
@@ -2631,10 +3225,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 return true;
             case KeyEvent.KEYCODE_SETTINGS:
             case KeyEvent.KEYCODE_NOTIFICATION:
-                // The remote's Settings button (TCL's sends NOTIFICATION) opens TV Settings, as Hisense's gear does by
-                // default; ours stay on the gear on screen. Hisense's gear is a Remote Buttons choice (RemoteKeys); where
-                // the system takes the key first, it never gets here.
-                if (RemoteKeys.HISENSE) return false;
+                // The remote's Settings button opens TV Settings; ours stay on the gear on screen. TCL's and Hisense's
+                // gear (NOTIFICATION) is a Remote Buttons choice (RemoteKeys, first): with Nothing, the key is left alone.
+                // Where the system takes the key first, it never gets here.
+                if (RemoteKeys.HISENSE || RemoteKeys.TCL) return false;
                 if (down && e.getRepeatCount() == 0) HomeApps.open(activity, HomeApps.tvSettings(), this, w / 2, h / 2, 1, 1);
                 return true;
             case KeyEvent.KEYCODE_BACK:
@@ -2783,6 +3377,38 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         gridDirty = true;
     }
 
+    /** Home pressed twice (HomeActivity). */
+    void showRecents() {
+        openRecents();
+    }
+
+    /** Recent Apps over a blurred copy of the screen (without the copy, over a dark veil). */
+    private void openRecents() {
+        if (recents == null) {
+            recents = new RecentApps(activity, new RecentApps.Host() {
+                @Override public void open(HomeApps.Item item) {
+                    handler.post(() -> {
+                        if (!HomeApps.open(activity, item, HomeView.this, getWidth() / 2, getHeight() / 2, 1, 1)) {
+                            showToast(Ui.trf("Couldn't open {app}.", "app", item.label));
+                        }
+                    });
+                }
+                @Override public void repaint() {
+                    recentLayer.postInvalidate();
+                    handler.post(() -> { wake(); spoken.readAgain(); });   // the list arrived: TalkBack reads the cards
+                }
+            }, k);
+        }
+        ScreenBlur.capture(activity, handler, blurred -> {
+            recents.setBackdrop(blurred);
+            recents.open();
+            recentLayer.setVisibility(VISIBLE);
+            recentLayer.invalidate();
+            spoken.readAgain();
+            wake();
+        });
+    }
+
     private void activate() {
         wake();
         if (reordering) {   // TalkBack's click while moving an app: drop it
@@ -2836,6 +3462,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             r = tileRects[shelfIndex];
         }
         click.open();
+        if (it.kind == HomeApps.RECENTS) {
+            openRecents();
+            return;
+        }
+        if (it.kind == HomeApps.HOME_ASSISTANT) {
+            pressHome(it);
+            return;
+        }
         if (it.kind == HomeApps.ALL_APPS) {
             openSheet();
             return;
@@ -2928,10 +3562,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         });
     }
 
-    // MARK: - Moving apps on the shelf
+    // MARK: - Moving shelf apps and top buttons
 
     private boolean canReorder() {
-        if (sheetOpen || zone != Z_SHELF || shelfIndex >= shelf.size() || shelf.size() < 2) return false;
+        if (sheetOpen || menuOpen) return false;
+        if (zone == Z_TOP) return topIndex >= 3 && topIndex < 3 + lightButtons.size() && lightButtons.size() > 1;
+        if (zone != Z_SHELF || shelfIndex >= shelf.size() || shelf.size() < 2) return false;
         HomeApps.Item it = shelf.get(shelfIndex);
         return it.kind == HomeApps.APP && it.pkg != null;
     }
@@ -2940,10 +3576,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         handler.removeCallbacks(holdStart);
         holdArmed = false;
         if (reordering || !canReorder()) return;
+        cancelReorder(true);   // settle an earlier drop before lifting another row
         wake();
+        reorderTop = zone == Z_TOP;
+        orderRevision++;
         reordering = reorderAnim = okHeld = true;
-        reorderOrigin = new ArrayList<>(shelf);
-        liftIndex = shelfIndex;
+        reorderOrigin = new ArrayList<>(reorderTop ? lightButtons : shelf);
+        liftIndex = reorderTop ? topIndex - 3 : shelfIndex;
         reorderAt = SystemClock.uptimeMillis();
         moveLift.target = 1;
         click.open();
@@ -2990,6 +3629,27 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Swaps the lifted app with its neighbor; both slide from where they are to their new slots. */
     private void shiftReorder(int dx) {
+        if (reorderTop) {
+            int i = topIndex - 3, j = i + dx;
+            if (j < 0 || j >= lightButtons.size()) return;
+            java.util.Collections.swap(lightButtons, i, j);
+            Spring focus = topFocus[3 + i];
+            topFocus[3 + i] = topFocus[3 + j];
+            topFocus[3 + j] = focus;
+            Spring slide = topSlide[i];
+            topSlide[i] = topSlide[j];
+            topSlide[j] = slide;
+            float d = topRects[3 + i].left - topRects[3 + j].left;
+            topSlide[j].value += d;
+            topSlide[i].value -= d;
+            topIndex = 3 + j;
+            liftIndex = j;
+            reorderAnim = statusDirty = true;
+            wake();
+            retarget(false);
+            click.move();
+            return;
+        }
         int i = shelfIndex, j = i + dx;
         if (j < 0 || j >= shelf.size()) return;
         HomeApps.Item it = shelf.get(i);
@@ -3016,20 +3676,31 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         click.move();
     }
 
-    /** OK: drops the app where it is and saves the shelf's new order. */
+    /** OK: drops the item where it is and saves that row's new order. */
     private void dropReorder() {
         if (!reordering) return;
         reordering = false;
+        orderRevision++;
         moveLift.target = 0;
+        List<HomeApps.Item> items = reorderTop ? lightButtons : shelf;
         boolean changed = false;
-        for (int i = 0; i < shelf.size() && !changed; i++) changed = shelf.get(i) != reorderOrigin.get(i);
+        for (int i = 0; i < items.size() && !changed; i++) changed = items.get(i) != reorderOrigin.get(i);
         reorderOrigin = null;
         click.open();
         retarget(false);
-        if (!changed) return;
+        if (!changed) { if (appsStale && running) reloadSoon(); return; }
         final List<String> order = new ArrayList<>();
+        if (reorderTop) {
+            for (HomeApps.Item it : lightButtons) order.add(it.key);
+            // Unavailable buttons (for example a missing store) keep their saved slots.
+            List<String> saved = Prefs.topButtons();
+            Prefs.setTopButtons(VisibleOrder.replace(saved == null ? HomeApps.TOP_DEFAULT : saved, order));
+            if (appsStale && running) reloadSoon();
+            return;
+        }
         for (HomeApps.Item it : shelf) order.add(it.pkg);
         final Context c = getContext().getApplicationContext();
+        pendingOrderSaves++;
         LOADER.execute(() -> {
             // The saved list may hold more than the shelf shows (apps not installed, past the limit): the shown ones
             // take their new order in the same slots, the others stay where they were.
@@ -3043,7 +3714,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 for (String p : all) if (!order.contains(p)) out.add(p);
             }
             final List<String> save = out;
-            handler.post(() -> Prefs.setShelf(save));
+            handler.post(() -> {
+                Prefs.setShelf(save);
+                pendingOrderSaves--;
+                if (appsStale && running) reloadSoon();
+            });
         });
     }
 
@@ -3052,9 +3727,28 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (!reordering && !reorderAnim) return;
         if (reordering) {
             reordering = false;
+            orderRevision++;
             moveLift.target = 0;
-            int n = shelf.size();
-            if (reorderOrigin != null && reorderOrigin.size() == n) {
+            int n = reorderTop ? lightButtons.size() : shelf.size();
+            if (reorderTop && reorderOrigin != null && reorderOrigin.size() == n) {
+                HomeApps.Item lifted = lightButtons.get(topIndex - 3);
+                Spring[] focus = new Spring[n], slide = new Spring[n];
+                for (int a = 0; a < n; a++) {
+                    int b = lightButtons.indexOf(reorderOrigin.get(a));
+                    focus[a] = topFocus[3 + b];
+                    slide[a] = topSlide[b];
+                    slide[a].value += topRects[3 + b].left - topRects[3 + a].left;
+                }
+                lightButtons.clear();
+                lightButtons.addAll(reorderOrigin);
+                for (int a = 0; a < n; a++) {
+                    topFocus[3 + a] = focus[a];
+                    topSlide[a] = slide[a];
+                }
+                liftIndex = lightButtons.indexOf(lifted);
+                topIndex = liftIndex + 3;
+                statusDirty = true;
+            } else if (!reorderTop && reorderOrigin != null && reorderOrigin.size() == n) {
                 HomeApps.Item lifted = shelf.get(shelfIndex);
                 Spring[] focus = new Spring[n], slide = new Spring[n];
                 LinearGradient[] shaders = tileShaders.length == n ? new LinearGradient[n] : tileShaders;
@@ -3073,13 +3767,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             }
             reorderOrigin = null;
             retarget(snap);
+            if (appsStale && running) reloadSoon();
         }
         if (snap) {
             moveLift.snap(0);
             for (Spring s : tileSlide) s.snap(0);
+            for (Spring s : topSlide) s.snap(0);
             wiggle = 0;
             liftIndex = -1;
             reorderAnim = false;
+            reorderTop = false;
+            statusDirty = true;
             tilesDirty = true;
         } else {
             wake();
@@ -3088,7 +3786,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** One frame of the move: the slides, the lift and the wiggle. Returns true while any of them moves. */
     private boolean stepReorder(float dt, long up) {
-        boolean moving = step(tileSlide, dt) | moveLift.step(dt);
+        boolean moving = step(tileSlide, dt) | step(topSlide, dt) | moveLift.step(dt);
         if (reordering || moveLift.value > 0.001f) {
             wiggle = WIGGLE_DEG * (float) Math.sin((up - reorderAt) * (2 * Math.PI / WIGGLE_MS));
             moving = true;
@@ -3096,13 +3794,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             wiggle = 0;
         }
         reorderAnim = moving;
+        if (!moving) { reorderTop = false; liftIndex = -1; }
         return moving;
     }
 
     // MARK: - TalkBack: every reachable item as a virtual node (Spoken). Id = group * 1000 + index + 1.
 
     /** The drawer's weather (0) and quotes (1) cards: read by TalkBack, never focused by the remote. */
-    private static final int GRID = 9, WIDGETS = 8, MENU_ITEMS = 10;
+    private static final int GRID = 9, WIDGETS = 8, MENU_ITEMS = 10, RECENT_CARDS = 11;
+
+    private boolean recentsOpen() {
+        return recents != null && recents.isOpen();   // not while it fades out: TalkBack reads the home screen again
+    }
 
     private static int a11yId(int group, int index) {
         return group * 1000 + index + 1;
@@ -3113,6 +3816,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void a11yItems(List<Integer> out) {
+        if (recentsOpen()) {   // it covers the screen: only its cards are read (or, with none, its message)
+            for (int i = 0; i < Math.max(1, recents.count()); i++) out.add(a11yId(RECENT_CARDS, i));
+            return;
+        }
         if (menuOpen) {
             for (int i = 0; i < menuOptions.length; i++) out.add(a11yId(MENU_ITEMS, i));
             return;
@@ -3133,6 +3840,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private String a11yText(int id) {
         int group = (id - 1) / 1000, i = (id - 1) % 1000;
         switch (group) {
+            case RECENT_CARDS:
+                if (!recentsOpen()) return "";
+                return recents.count() == 0 ? Ui.tr("Recent Apps") + ". " + recents.emptyText() : recents.spoken(i);
             case MENU_ITEMS:
                 if (!menuOpen || i >= menuOptions.length) return "";
                 return (i == 0 && menuItem != null ? menuItem.title + ". " : "") + menuOptions[i] + ", "
@@ -3141,6 +3851,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= others.size()) return "";
                 return label(others, i) + ", " + Ui.trf("{i} of {n}", "i", i + 1, "n", others.size());
             case Z_TOP:
+                if (reordering && reorderTop && i == topIndex) {
+                    return Ui.trf("Moving {app}, position {n} of {total}",
+                            "app", label(lightButtons, i - 3), "n", i - 2, "total", lightButtons.size());
+                }
                 if (i >= 3) return label(lightButtons, i - 3);
                 return Ui.trf("{name}, tab {i} of {n}", "name", tabs()[i], "i", i + 1, "n", 3);
             case Z_CARDS: return i < cards.size() ? pickText(cards.get(i)) : "";
@@ -3151,7 +3865,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 return it.title + (it.episode != null ? ", " + it.episode : "") + (left != null ? ", " + left : "")
                         + (it.app != null && !it.app.isEmpty() ? ". " + Ui.trf("App: {app}", "app", it.app) : "");
             case Z_SHELF:
-                if (reordering && i == shelfIndex) {
+                if (reordering && !reorderTop && i == shelfIndex) {
                     return Ui.trf("Moving {app}, position {n} of {total}",
                             "app", label(shelf, i), "n", i + 1, "total", shelf.size());
                 }
@@ -3170,6 +3884,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         int group = (id - 1) / 1000, i = (id - 1) % 1000;
         float dy;
         switch (group) {
+            case RECENT_CARDS:
+                if (!recentsOpen()) return false;
+                if (recents.count() == 0) recents.emptyBounds(a11yRect);
+                else if (!recents.bounds(i, a11yRect)) return false;
+                dy = 0;
+                break;
             case MENU_ITEMS:
                 if (!menuOpen || i >= menuOptions.length) return false;
                 menuRow(i, a11yRect);
@@ -3228,7 +3948,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** What holding OK does on an item, TalkBack offers as a long click. */
     private boolean a11yHolds(int id) {
         int group = (id - 1) / 1000, i = (id - 1) % 1000;
+        if (group == RECENT_CARDS) return recentsOpen() && recents.stoppable(i);   // TalkBack's long click closes it, as ▲ does
         if (group == GRID) return canToggleShelf(i);
+        if (group == Z_TOP) {
+            return !reordering && !menuOpen && !sheetOpen && lightButtons.size() > 1
+                    && i >= 3 && i < 3 + lightButtons.size();
+        }
         if (group == Z_SHELF) {   // TalkBack's long click lifts the app, as holding OK does
             return !reordering && !menuOpen && !sheetOpen && shelf.size() > 1 && i < shelf.size()
                     && shelf.get(i).kind == HomeApps.APP && shelf.get(i).pkg != null;
@@ -3237,6 +3962,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private int a11yFocused() {
+        if (recentsOpen()) return a11yId(RECENT_CARDS, recents.count() == 0 ? 0 : recents.focus());
         if (menuOpen) return a11yId(MENU_ITEMS, menuIndex);
         if (sheetOpen) return others.isEmpty() ? -1 : a11yId(GRID, gridIndex);
         switch (zone) {
@@ -3259,6 +3985,21 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return out;
     }
 
+    /**
+     * The background is the focused pick's, as on Netflix and Prime Video: once the focus has rested on it BG_FOLLOW_MS,
+     * so a quick run along the row fades once. Its backdrop is already in memory (this tab's picks all are).
+     */
+    private final Runnable bgFollow = new Runnable() {
+        @Override public void run() {
+            if (!running || !picksMode() || cards.isEmpty()) return;
+            Backdrop b = recs.backdrop(cards.get(Math.min(cardIndex, cards.size() - 1)));
+            // Not built yet (updateCards shows it when it is), or already there: nothing to fade, no frame to draw
+            if (b == null || b == bgTo) return;
+            showBackdrop(b);
+            wake();
+        }
+    };
+
     /** A spoken-feedback service (TalkBack) is on. */
     private boolean talkBack() {
         AccessibilityManager am = (AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
@@ -3270,6 +4011,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void a11yFocus(int id) {
         wake();
         int group = (id - 1) / 1000, i = (id - 1) % 1000;
+        if (recentsOpen()) {
+            if (group == RECENT_CARDS) recents.setFocus(i);
+            recentLayer.invalidate();
+            return;
+        }
         if (menuOpen) {
             if (group == MENU_ITEMS && i < menuOptions.length && i != menuIndex) moveMenu(i - menuIndex);
             return;
@@ -3323,7 +4069,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private static String label(List<HomeApps.Item> list, int i) {
-        return i >= 0 && i < list.size() && list.get(i).label != null ? list.get(i).label : "";
+        if (i < 0 || i >= list.size() || list.get(i).label == null) return "";
+        HomeApps.Item it = list.get(i);
+        if (it.kind == HomeApps.HOME_ASSISTANT && it.control != null && it.control.hasOnOff()) {
+            return Ui.trf("{name}, {state}", "name", it.label, "state", it.control.on() ? Ui.tr("On") : Ui.tr("Off"));
+        }
+        return it.label;
     }
 
     /** A recommendation: title, details and the app that plays it. */
@@ -3408,6 +4159,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             Symbols.warm(getContext(), it.symbol, 27 * k);
             Symbols.warm(getContext(), it.symbol, 27 * k * 1.1f);
         }
+        if (Prefs.statusIcons()) {   // at the sizes drawStatusIcon uses: drawing never scales a 150 px PNG down to 25
+            for (String name : STATUS_SYMBOLS) {
+                Symbols.warm(getContext(), name, Symbols.pointSizeForHeight(getContext(), name, L_STATUS * k * statusScale(name)));
+            }
+        }
         Symbols.warmWeather(getContext(), 40 * k);
         heroDirty = statusDirty = true;
         layoutCards();
@@ -3425,7 +4181,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
     }
 
-    /** The three cards of the current tab (Explore, Movies, Shows) and the background taken from the first one. */
+    /** The three cards of the current tab (Explore, Movies, Shows) and the background taken from the focused one. */
     private void updateCards() {
         cardSlots = Prefs.cards();
         if (!picksMode()) {
@@ -3454,7 +4210,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         // Picks bring their own background; without them (no TMDB key), your photo if there is one.
         boolean own = !picksOn() && Photos.on(getContext());
-        Backdrop b = own ? Photos.backdrop(getContext(), ownReady) : cards.isEmpty() ? null : recs.backdrop(cards.get(0));
+        Backdrop b = own ? Photos.backdrop(getContext(), ownReady)
+                : cards.isEmpty() ? null : recs.backdrop(cards.get(Math.min(cardIndex, cards.size() - 1)));
         if (b != null || (cards.isEmpty() && !own)) showBackdrop(b);
         heroDirty = true;
         spoken.focusMoved();    // new picks under the focused card
@@ -3919,8 +4676,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     /**
-     * Background: the first card's photo, heavily blurred and almost white; without it, a light gradient. At night, the
-     * same photo almost black (or a dark gradient), drawn on top during the transition.
+     * Background: the focused card's photo, heavily blurred and almost white; without it, a light gradient. At night,
+     * the same photo almost black (or a dark gradient), drawn on top during the transition.
      */
     private void drawLightSky(Canvas c) {
         long up = SystemClock.uptimeMillis();
@@ -4167,6 +4924,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             c.drawText(TextUtils.ellipsize(p.meta, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
             lCardMeta.setAlpha(a);
         }
+        // A narrow card shows only its title: why it's there (Trakt's "Up next: S2 E5") goes under it, fading into the
+        // whole meta (which starts with it) as the card widens.
+        if (open < 0.98f && p.tag != null) {
+            fitPaint.set(lCardMeta);
+            int a = lCardMeta.getAlpha();
+            lCardMeta.setAlpha(Math.round(a * (1 - open)));
+            c.drawText(TextUtils.ellipsize(p.tag, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
+            lCardMeta.setAlpha(a);
+        }
     }
 
     /**
@@ -4175,10 +4941,25 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
      */
     private void drawLightButtons(Canvas c) {
         applyTone();
-        for (int i = 0; i < lightButtons.size(); i++) {
+        drawStatusIcons(c);
+        for (int slot = 0; slot < lightButtons.size(); slot++) {
+            int i = slot;
+            // The lifted button passes over its neighbors while they exchange places.
+            if (reorderTop && liftIndex >= 0 && liftIndex < lightButtons.size()) {
+                if (slot == lightButtons.size() - 1) i = liftIndex;
+                else if (slot >= liftIndex) i = slot + 1;
+            }
             HomeApps.Item it = lightButtons.get(i);
             RectF r = topRects[3 + i];
-            float f = Ui.clamp(topFocus[3 + i].value), s = 1 + 0.1f * f, rad = r.width() / 2 * s;
+            float lift = reorderTop && i == liftIndex ? Math.max(0, moveLift.value) : 0;
+            float dx = topSlide[i].value;
+            boolean transform = dx != 0 || lift > 0.001f;
+            if (transform) {
+                c.save();
+                c.translate(dx, -6 * k * lift);
+                if (lift > 0.001f) c.rotate(wiggle * lift, r.centerX(), r.centerY());
+            }
+            float f = Ui.clamp(topFocus[3 + i].value), s = 1 + 0.1f * f + LIFT_GROW * lift, rad = r.width() / 2 * s;
             cell.set(r.centerX() - rad, r.centerY() - rad, r.centerX() + rad, r.centerY() + rad);
             tmp.set(cell);
             tmp.offset(0, (6 + 8 * f) * k);
@@ -4200,12 +4981,41 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 lTip.setAlpha(Math.round(255 * f));
                 c.drawText(label, x, r.bottom + (40 + 4 * f) * k, lTip);
             }
+            if (transform) c.restore();
         }
         if (sleepText.isEmpty()) return;
         float right = (lightButtons.isEmpty() ? CONTENT_R * k : topRects[3].left) - 28 * k, cy = L_BUTTON_CY * k;
         float tw = lQuote.measureText(sleepText), size = lQuote.getTextSize();
         c.drawText(sleepText, right - tw, cy + Ui.halfCap(lQuote), lQuote);
         Symbols.draw(getContext(), c, "bedtime", right - tw - size * 0.9f, cy, size, lQuote.getColor());
+    }
+
+    /** Wi-Fi/Ethernet, Bluetooth (when something is connected) and a USB drive, at the top left. */
+    private void drawStatusIcons(Canvas c) {
+        if (!Prefs.statusIcons()) return;
+        float height = L_STATUS * k, gap = L_STATUS_GAP * k;
+        int color = Ui.alpha(tone(L_INK, 0xEBFFFFFF), 0.85f);
+        float x = MARGIN * k;
+        // The top title ("For You", or "Continue Watching") is on this line too: the icons start after it, not on it.
+        if (!clockMode()) x += lTitle.measureText(picksMode() ? Ui.tr("For You") : Ui.tr("Continue Watching")) + gap;
+        if (network != 0) x = drawStatusIcon(c, network == 2 ? "ethernet" : "wifi", x, height, gap, color);
+        if (bluetoothConnected) x = drawStatusIcon(c, "bluetooth", x, height, gap, color);
+        if (usbConnected) drawStatusIcon(c, "usb", x, height, gap, color);
+    }
+
+    /** Narrow symbols need a little more height to look as big as wide ones. */
+    private static float statusScale(String name) {
+        if ("bluetooth".equals(name)) return 1.18f;
+        if ("usb".equals(name)) return 1.3f;
+        return 1;
+    }
+
+    /** Draws a status icon left-aligned at `left`; returns where the next one starts. */
+    private float drawStatusIcon(Canvas c, String name, float left, float height, float gap, int color) {
+        float size = Symbols.pointSizeForHeight(getContext(), name, height * statusScale(name));
+        float width = Symbols.width(getContext(), name, size);
+        Symbols.draw(getContext(), c, name, left + width / 2, L_BUTTON_CY * k, size, color);
+        return left + width + gap;
     }
 
     /**

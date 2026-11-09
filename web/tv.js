@@ -15,11 +15,20 @@ var TV = (function () {
   // 2017 and 2018 Samsungs (Tizen 3 and 4) freeze opening their settings from an app (MU6100, MU6122, NU7400, #257).
   var tizen34 = samsung && /Tizen [34]\./.test(navigator.userAgent);
   // Tizen 2 (2016 TVs, WebKit 538) repaints every shadow on every frame of a focus animation: home.css turns them off.
-  // So do TVs under 2 GB that draw the page at twice its size (an LG on webOS TV Lite 10, MT5889, 1.3 GB, ratio 2:
-  // 23-28 fps moving along the shelf, 60 with lite; shadows off alone, 45). deviceMemory rounds down to 1 under 2 GB on
-  // webOS 5+ and Tizen 5+, where 1.5 GB TVs at a ratio of 1 run smoothly.
-  if (tizen2 || ((webos || samsung) && navigator.deviceMemory && navigator.deviceMemory <= 1 && (window.devicePixelRatio || 1) > 1)) {
+  // So do LGs under 2 GB: an LG on webOS TV Lite 10 (MT5889, 1.3 GB, ratio 2) ran the shelf at 23-28 fps, 60 with lite
+  // and 45 with only the shadows off (#318); a 43LR6700PSA on webOS TV Lite 8.5 (1.5 GB, ratio 1) at 45-50, 59 with
+  // lite and 55 with only the shadows off (#383). Samsungs at that memory too: a 2021 UN50AU7700 (Tizen 6, 1.5 GB, ratio
+  // 1) still stutters at each move with flat alone (#461). deviceMemory (webOS 5+, Tizen 5+) is the nearest power of two,
+  // so it reads 1 up to about 1.5 GB.
+  var lowMemory = navigator.deviceMemory && navigator.deviceMemory <= 1;
+  if (tizen2 || ((webos || samsung) && lowMemory)) {
     document.documentElement.className += ' lite';
+  } else if (samsung && navigator.deviceMemory && navigator.deviceMemory <= 2) {
+    // Samsungs up to 2 GB keep the animations but not the soft shadows of the parts that move (home.css): a 2021 Frame
+    // (QE55LS03A, Tizen 6, 2 GB, ratio 1) froze for up to 360 ms on each move along the picks and dropped 78 frames in
+    // 8 moves along the shelf; with flat, at most 75 ms and 13 frames. Not with lite, which has no shadows or
+    // animations to spare, and where the layers flat asks for would only take memory.
+    document.documentElement.className += ' flat';
   }
 
   /** One Luna call; done(result) with null on failure. */
@@ -176,7 +185,7 @@ var TV = (function () {
   // (a 2016 KU6300, Tizen 2.4) can carry other ids for the same apps.
   var SAMSUNG_ICON_NAMES = {
     youtube: 'icons/youtube.png', primevideo: 'icons/prime.png', amazonprimevideo: 'icons/prime.png',
-    netflix: 'icons/netflix.svg', max: 'icons/max.svg', hbomax: 'icons/max.svg', spotify: 'icons/spotify.svg',
+    netflix: 'icons/netflix.svg', max: 'icons/max.svg', spotify: 'icons/spotify.svg',
     deezer: 'icons/deezer.svg', youtubekids: 'icons/youtubekids.svg', redbulltv: 'icons/redbull.svg', ted: 'icons/ted.svg',
     steamlink: 'icons/steam.svg', jellyfin: 'icons/jellyfin.svg', paramount: 'icons/paramountplus.svg',
     paramountplus: 'icons/paramountplus.svg', crunchyroll: 'icons/crunchyroll.svg', twitch: 'icons/twitch.svg',
@@ -216,7 +225,7 @@ var TV = (function () {
     ['globoplaywebos', 'Globoplay'], ['spotify-beehive', 'Spotify', 'icons/spotify.svg'],
     ['tv.twitch.tv.starshot.lg', 'Twitch', '', '#9146FF'], ['cdp-30', 'Plex', '', '#E5A00D'],
     ['org.jellyfin.webos', 'Jellyfin', 'icons/jellyfin.svg'], ['com.crunchyroll.webapp', 'Crunchyroll', '', '#F47521'],
-    ['com.webos.app.browser', 'Web Browser', '', '#3A7BD5']
+    ['com.webos.app.browser', 'Web Browser', '', '#3A7BD5'], ['space.nuvio.webos', 'Nuvio TV', '', '#0E0F12']
   ];
 
   function knownApps(done) {
@@ -292,11 +301,26 @@ var TV = (function () {
    * the TV's own DIAL server, which phones cast through, does.
    */
   var samsungDial = {}, NATIVE = /^\d+(\.|$)/;
+  /**
+   * Netflix on 2017 and 2018 Samsungs (Tizen 3 and 4): launch answers success and Netflix stays black, Back and all
+   * (MU6100, MU6122, NU7400, #257). Smart Hub's own number for it, through the TV's REST API, opens it normally, as
+   * phones do; the TV may ask once whether to allow it, so that call waits for the person.
+   */
+  var NETFLIX_HUB = '11101200001';
 
   function dialLaunch(name, done) {
+    post('/ws/apps/' + name, 8000, done);
+  }
+
+  function hubLaunch(hubId, done) {
+    post('/api/v2/applications/' + hubId, 30000, done);
+  }
+
+  /** A POST to the TV's own server on port 8001 (DIAL and its REST API); done(ok). */
+  function post(path, timeout, done) {
     var x = new XMLHttpRequest(), over = false;
-    x.open('POST', 'http://127.0.0.1:8001/ws/apps/' + name, true);
-    x.timeout = 8000;
+    x.open('POST', 'http://127.0.0.1:8001' + path, true);
+    x.timeout = timeout;
     x.onreadystatechange = function () {
       if (x.readyState !== 4 || over) return;
       over = true;
@@ -317,6 +341,10 @@ var TV = (function () {
       }
     }
     function failed() { if (done) done(false); }
+    if (tizen34 && dial === 'Netflix') {
+      hubLaunch(NETFLIX_HUB, function (ok) { if (ok) { if (done) done(true); } else launch(function () { dialLaunch(dial, done); }); });
+      return;
+    }
     // A native id: DIAL first (launch doesn't open those on Tizen 2.3), and launch where DIAL doesn't answer.
     if (dial && NATIVE.test(id)) {
       dialLaunch(dial, function (ok) { if (ok) { if (done) done(true); } else launch(failed); });

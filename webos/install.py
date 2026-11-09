@@ -11,6 +11,7 @@ The app shows the TV's IP address and a passphrase.
 The first time, this downloads the TV's key from its Key Server and asks for that passphrase (type it here; it is
 not stored). The unlocked key is kept in ~/.ssh/freemytv_webos_<IP>, so updates need neither. The app is copied over
 SSH (port 9922) and installed with the TV's own installer (com.webos.appInstallService), the way LG's tools do it.
+On a TV that isn't 4K (Full HD or HD), it goes in at 1280 x 720, the size those TVs draw apps at (--1080p: as built).
 Install flow based on FreeMyTvWebOS by danielthejoker18 (MIT). Needs Python 3 and OpenSSH (ssh, ssh-keygen).
 """
 import getpass
@@ -24,6 +25,9 @@ import tempfile
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, 'webos'))
+import build  # noqa: E402  (reads and changes the package's appinfo.json)
+
 IPK = os.path.join(ROOT, 'FreeMyTV-webos.ipk')
 with open(os.path.join(ROOT, 'webos', 'appinfo.json'), encoding='utf-8') as f:
     APP_ID = json.load(f)['id']
@@ -78,9 +82,9 @@ def fetch_key(ip):
     return path
 
 
-def ssh(ip, key, command, stdin=None, tty=False):
+def ssh(ip, key, command, data=None, tty=False):
     args = ['ssh'] + (['-tt'] if tty else []) + SSH_OPTS + ['-i', key, 'prisoner@' + ip, command]
-    return subprocess.run(args, stdin=stdin, capture_output=True, text=stdin is None)
+    return subprocess.run(args, input=data, capture_output=True, text=data is None)
 
 
 def luna(ip, key, uri, payload, replies=1, wait=20):
@@ -111,9 +115,16 @@ def main():
 
     if not os.path.exists(IPK):
         subprocess.run([sys.executable, os.path.join(ROOT, 'webos', 'build.py')], check=True)
-    print('Copying the app to the TV ...')
     with open(IPK, 'rb') as f:
-        copy = ssh(ip, key, 'mkdir -p /media/developer/temp && cat > ' + TEMP, stdin=f)
+        package = f.read()
+    # Full HD and HD LGs draw apps at 1280 x 720, and some show one that asks for 1920 x 1080 only in the top left (#402).
+    if '--1080p' not in sys.argv and build.resolution(package) != '1280x720':
+        info = luna(ip, key, 'luna://com.webos.service.tv.systemproperty/getSystemInfo', {'keys': ['UHD']}, wait=5)
+        if re.search(r'"UHD"\s*:\s*"?false', info):
+            package = build.with_resolution(package, '1280x720')
+            print('This TV isn\'t 4K, so the app goes in at 1280 x 720, the size it draws apps at.')
+    print('Copying the app to the TV ...')
+    copy = ssh(ip, key, 'mkdir -p /media/developer/temp && cat > ' + TEMP, data=package)
     if copy.returncode != 0:
         err = copy.stderr.decode('utf-8', 'replace') if isinstance(copy.stderr, bytes) else copy.stderr
         sys.exit('Couldn\'t copy it: %s\nIs Developer Mode still on? If the key changed, delete %s and try again.' % (err.strip(), key))

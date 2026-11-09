@@ -27,9 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * The page a phone opens from the QR code in Home Settings > TMDB key, to send the key instead of typing it with the
+ * The page a phone opens from the QR code in Home Settings > TMDB key or Watchmode key, to send the key instead of typing it with the
  * remote: http://<the TV's address on the home network>:<a port the system picks>/<a one-time random token>. It takes
- * one key (one POST), has the TV check it with TMDB, answers with the result and stops; after 5 minutes it stops
+ * one key (one POST), has the TV check it with its service, answers with the result and stops; after 5 minutes it stops
  * anyway. Plain HTTP, since a phone can't check a certificate for a LAN address; it listens only on that address. The
  * key is never logged.
  */
@@ -39,7 +39,7 @@ final class KeyPage {
         /** A phone sent a key: the TV checks it now. */
         void checking();
         /** Checks the key and saves it: null when it's saved, else why not (the phone shows it too). */
-        String accept(String key);
+        String accept(String key, boolean watchmode);
         /** The page stopped: after the key, after 5 minutes (expired) or close(). Called once. */
         void closed(KeyPage page, boolean expired);
     }
@@ -53,12 +53,14 @@ final class KeyPage {
     private final ServerSocket server;
     private final String path;
     private final Listener listener;
+    private final boolean watchmode;   // the Watchmode key's page, else TMDB's
     private final AtomicBoolean taken = new AtomicBoolean();      // a key came: the one this page takes
     private final AtomicInteger answering = new AtomicInteger();   // connections being answered
     private volatile boolean closed;
 
-    KeyPage(InetAddress lan, Listener listener) throws IOException {
+    KeyPage(InetAddress lan, boolean watchmode, Listener listener) throws IOException {
         this.listener = listener;
+        this.watchmode = watchmode;
         byte[] random = new byte[12];
         new SecureRandom().nextBytes(random);
         path = "/" + Base64.getUrlEncoder().withoutPadding().encodeToString(random);
@@ -196,7 +198,7 @@ final class KeyPage {
             return false;
         }
         listener.checking();
-        String why = listener.accept(field(new String(body, StandardCharsets.US_ASCII), "key"));
+        String why = listener.accept(field(new String(body, StandardCharsets.US_ASCII), "key"), watchmode);
         respond(out, "200 OK", "text/html; charset=utf-8", result(why));
         return true;
     }
@@ -257,18 +259,31 @@ final class KeyPage {
     /** How to get a key, then the field to paste it in. */
     private byte[] form() {
         StringBuilder b = top();
+        if (watchmode) {
+            b.append("<p>").append(esc(Ui.tr("The key makes a pick open the title's page in its app, where the app allows it.")))
+                    .append("</p><p>").append(esc(Ui.tr("Free, and it takes two minutes:"))).append("</p><ol><li>")
+                    .append(esc(Ui.tr("Create an account at api.watchmode.com."))).append("</li><li>")
+                    .append(esc(Ui.tr("Copy the API key it gives you."))).append("</li><li>")
+                    .append(esc(Ui.tr("Paste the key here:"))).append("</li></ol>")
+                    .append("<p><a class=b href=\"https://api.watchmode.com/requestApiKey/\" target=_blank rel=noreferrer>")
+                    .append(esc(Ui.tr("Open Watchmode's API page"))).append("</a></p>");
+            return bottom(keyField(b, Ui.tr("Watchmode key")));
+        }
         b.append("<p>").append(esc(Ui.tr("The key brings the picks: what's trending on your streaming apps, with their photos on the screensaver.")))
                 .append("</p><p>").append(esc(Ui.tr("Free, and it takes two minutes:"))).append("</p><ol><li>")
                 .append(esc(Ui.tr("Create an account at themoviedb.org."))).append("</li><li>")
                 .append(esc(Ui.tr("Open Settings → API and request a developer key."))).append("</li><li>")
                 .append(esc(Ui.tr("Paste the API Read Access Token (or the API Key) here:"))).append("</li></ol>")
                 .append("<p><a class=b href=\"https://www.themoviedb.org/settings/api\" target=_blank rel=noreferrer>")
-                .append(esc(Ui.tr("Open TMDB's API page"))).append("</a></p>")
-                .append("<form method=post action=\"").append(path).append("\">")
-                .append("<textarea name=key aria-label=\"").append(esc(Ui.tr("TMDB key"))).append("\" rows=4 required autocomplete=off autocapitalize=off autocorrect=off spellcheck=false></textarea>")
+                .append(esc(Ui.tr("Open TMDB's API page"))).append("</a></p>");
+        return bottom(keyField(b, Ui.tr("TMDB key")));
+    }
+
+    private StringBuilder keyField(StringBuilder b, String name) {
+        return b.append("<form method=post action=\"").append(path).append("\">")
+                .append("<textarea name=key aria-label=\"").append(esc(name)).append("\" rows=4 required autocomplete=off autocapitalize=off autocorrect=off spellcheck=false></textarea>")
                 .append("<button>").append(esc(Ui.tr("Send to the TV"))).append("</button></form><p class=s>")
                 .append(esc(Ui.tr("The key stays on your TV. This page works once, for 5 minutes."))).append("</p>");
-        return bottom(b);
     }
 
     private byte[] result(String why) {
@@ -282,7 +297,7 @@ final class KeyPage {
         return bottom(b);
     }
 
-    private static StringBuilder top() {
+    private StringBuilder top() {
         return new StringBuilder(2048).append("<!doctype html><html lang=\"").append(esc(Ui.language))
                 .append("\"><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">")
                 .append("<title>Free My TV</title><style>")
@@ -293,7 +308,7 @@ final class KeyPage {
                 .append("border-radius:12px;background:#f5f5f7;color:#1c1c1e;font:600 17px system-ui,sans-serif;text-align:center;")
                 .append("text-decoration:none}.b{background:#3a3a3c;color:#f5f5f7}.s{color:#98989d;font-size:15px}")
                 .append(".ok{color:#7ee08a;font-size:20px}.no{color:#ffc266;font-size:20px}</style>")
-                .append("<h1>").append(esc(Ui.tr("TMDB key"))).append(" · Free My TV</h1>");
+                .append("<h1>").append(esc(watchmode ? Ui.tr("Watchmode key") : Ui.tr("TMDB key"))).append(" · Free My TV</h1>");
     }
 
     private static byte[] bottom(StringBuilder b) {

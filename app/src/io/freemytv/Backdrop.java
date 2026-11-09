@@ -92,7 +92,9 @@ final class Backdrop {
         Canvas c = new Canvas(out);
         if (forLight) {
             // Light design: everything comes from the photo without scrims.
-            Bitmap wide = card(out, WIDE_W, WIDE_H);
+            // The wide card is far wider than the photo: its strip comes off the bottom (under the card's text), not
+            // half off the top.
+            Bitmap wide = card(out, WIDE_W, WIDE_H, 0);
             int[] frost = reduce(out, FW, FH, 3, 3);
             int[] light = whiten(frost.clone(), 0.82f);
             int[] glass = reduce(out, GW, GH, 2, 2);
@@ -145,6 +147,34 @@ final class Backdrop {
      * (bottom left) and the clock (top right) sit, for the scrims. Returns {photo (mutable), frosted}.
      */
     static Bitmap[] photo(java.io.File f, int w, int h, float[] light) throws java.io.IOException {
+        return photo(f, w, h, light, 0);
+    }
+
+    /**
+     * `around` != 0: the whole photo, fitted inside w × h (never cropped) on that color; else its middle
+     * cropped to fill w × h.
+     */
+    static Bitmap[] photo(java.io.File f, int w, int h, float[] light, int around) throws java.io.IOException {
+        if (around != 0) {
+            Bitmap src = android.graphics.BitmapFactory.decodeFile(f.getPath());
+            if (src == null) throw new java.io.IOException("unreadable image");
+            float s = Math.min((float) w / src.getWidth(), (float) h / src.getHeight());
+            int pw = Math.max(1, Math.round(src.getWidth() * s)), ph = Math.max(1, Math.round(src.getHeight() * s));
+            Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(out);
+            c.drawColor(around);
+            int x = (w - pw) / 2, y = (h - ph) / 2;
+            c.drawBitmap(src, null, new android.graphics.Rect(x, y, x + pw, y + ph),
+                    new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG));
+            src.recycle();
+            if (light != null && light.length >= 2) {
+                light[0] = luminance(out, 0, 0.6f, 0.5f, 0.95f);
+                light[1] = luminance(out, 0.62f, 0.04f, 0.96f, 0.36f);
+            }
+            int fw = w / PHOTO_FROST, fh = h / PHOTO_FROST;
+            Bitmap frost = Bitmap.createBitmap(reduce(out, fw, fh, 3, 2), fw, fh, Bitmap.Config.ARGB_8888);
+            return new Bitmap[] {out, frost};
+        }
         android.graphics.BitmapFactory.Options bounds = new android.graphics.BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         android.graphics.BitmapFactory.decodeFile(f.getPath(), bounds);
@@ -182,7 +212,18 @@ final class Backdrop {
 
     /** The center of the photo at the card's aspect ratio, filtered down to the exact size. */
     static Bitmap card(Bitmap full, int w, int h) {
-        Bitmap b = center(full, (float) w / h);
+        return card(full, w, h, 0.5f);
+    }
+
+    /**
+     * The photo at the card's aspect ratio, filtered down to the exact size. Where it's taller than the card, `top`
+     * says where the cut goes: 0 keeps its top and takes the strip off the bottom, 0.5 takes half from each.
+     */
+    static Bitmap card(Bitmap full, int w, int h, float top) {
+        float ratio = (float) w / h;
+        int cw = Math.min(full.getWidth(), Math.round(full.getHeight() * ratio));
+        int ch = Math.min(full.getHeight(), Math.round(cw / ratio));
+        Bitmap b = Bitmap.createBitmap(full, (full.getWidth() - cw) / 2, Math.round((full.getHeight() - ch) * top), cw, ch);
         Bitmap out = Ui.downscale(b, w, h);
         if (b != full && b != out) b.recycle();
         return out == full ? gpu(full.copy(Bitmap.Config.ARGB_8888, false)) : gpu(out);

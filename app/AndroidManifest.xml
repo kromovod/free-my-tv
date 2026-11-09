@@ -19,11 +19,18 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- "Continue watching": what you left half-way in your apps, from Android TV's own Watch Next list. -->
     <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
+    <!-- The Bluetooth status icon: whether headphones or a speaker are connected. Before Android 12 the permission is
+         granted at install; from 12 it is asked for when Status icons is turned on (and only the icon needs it). -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- Android 11+: without this list the app can't "see" the other apps (getLeanbackLaunchIntentForPackage
          returns null). The shelf and streaming apps, the live TV apps and, through the <intent>, every TV app
          (for "All Apps"). -->
     <queries>
+        <!-- Optional App Store top button: Google Play or Amazon Appstore. -->
+        <package android:name="com.android.vending" />
+        <package android:name="com.amazon.venezia" />
         <package android:name="com.netflix.ninja" />
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.amazon.firetv.youtube" />
@@ -58,6 +65,8 @@
         <package android:name="ru.rt.video.app.tv" />
         <package android:name="in.startv.hotstar" />
         <package android:name="com.crunchyroll.crunchyroid" />
+        <!-- Sony: Google TV's home app takes its remote's app buttons (Prefs.sonyGoogleTv, #395) -->
+        <package android:name="com.google.android.apps.tv.launcherx" />
         <package android:name="net.cme.voyo.cz.tvapp" />
         <package android:name="com.spotify.tv.android" />
         <package android:name="com.tcl.tv" />
@@ -98,7 +107,7 @@
         android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:allowBackup="false"
-        android:usesCleartextTraffic="false">
+        android:networkSecurityConfig="@xml/network_security_config">
 
         <!-- The app's icon opens the settings (switch between Free My TV and the original home screen). -->
         <activity
@@ -118,6 +127,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".QuickSettingsActivity"
+            android:process=":home"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="io.freemytv.quick"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:screenOrientation="landscape"
+            android:theme="@style/FreeMyTV.QuickSettings" />
 
         <!-- The home screen. Its own process (:home): if it ever crashes, the safety net in the main process still
              works. It only becomes the TV's home screen in Free My TV mode (cmd package set-home-activity). -->
@@ -155,6 +175,18 @@
             android:screenOrientation="landscape"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|locale|layoutDirection"
             android:theme="@style/FreeMyTV.Home" />
+
+        <!-- The quick settings panel the remote's Settings button opens in Free My TV mode (RemoteKeys), over what's
+             playing: a window on the left of the screen, not the whole screen. -->
+        <activity
+            android:name=".QuickPanelActivity"
+            android:process=":home"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="io.freemytv.panel"
+            android:excludeFromRecents="true"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|locale|layoutDirection"
+            android:theme="@style/FreeMyTV.Panel" />
 
         <service
             android:name=".Screensaver"
@@ -209,6 +241,13 @@
         <provider
             android:name=".PhotoInbox"
             android:authorities="io.freemytv.photos"
+            android:exported="true" />
+
+        <!-- tools/send_key.py writes keys that stay out of the APK here (the Immich key, Home Assistant's token); only
+             adb's shell may write (Secrets checks). -->
+        <provider
+            android:name=".Secrets"
+            android:authorities="io.freemytv.secrets"
             android:exported="true" />
 
         <!-- The sleep timer's minutes left over any app, while the timer runs. A process of its own: a foreground

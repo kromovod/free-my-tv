@@ -196,6 +196,14 @@ def main():
         if 'different certificate' in out:
             hint = ('\nThe Free My TV on the TV was signed with another certificate, and the TV only updates it with the '
                     'same one. Remove it on the TV (' + ON_TV + '), then run this again.')
+        elif 'failed[118]' in out:
+            # Tizen 2.4 gives no reason: a 2016 KU6640 answered this to every build after an install that failed
+            # half-way, with nothing to see on the TV, until vd_appuninstall removed what was left (#349).
+            hint = ('\nThe TV may still hold a Free My TV signed with another certificate, even one that doesn\'t show '
+                    '(a failed install can leave one). Remove it, then run this again:\n    python3 tizen/install.py %s '
+                    '--uninstall\n(That also clears what Free My TV keeps on the TV, such as a TMDB key typed there.) '
+                    'Still failed[118] after that? Some models refuse developer installs altogether (a 2016 Full HD '
+                    'K5670 did, #349): a Google TV streamer on HDMI runs Free My TV there.' % ip)
         sys.exit('The TV didn\'t finish installing. It said:\n' + out.strip() + hint)
     sdb.shell('0 was_execute ' + app_id, r'launched|spend time', 20)
     print('Installed and open on the TV.')

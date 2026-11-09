@@ -1,7 +1,7 @@
 /*
  * The home screen on a 1920 × 1080 stage, with the Android app's measurements (HomeView): the title and tabs at the top
  * left, icon-only glass buttons at the top right, three picks, and the glass shelf at the bottom; ↓ on the shelf opens
- * the drawer (inputs, shortcuts, weather, prices). Light by day, dark from sunset to sunrise.
+ * the drawer (inputs, shortcuts, weather). Light by day, dark from sunset to sunrise.
  * No CSS variables, grid or backdrop-filter: older LG TVs (webOS 3 and 4) don't have them, and blur is too heavy for
  * their GPUs. Only transform and opacity animate.
  */
@@ -51,7 +51,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   background-color: currentColor;
 }
 
-/* MARK: - Background: the first pick's photo, very blurred and almost white (almost black at night). */
+/* MARK: - Background: the focused pick's photo, very blurred and almost white (almost black at night). */
 
 #sky { background: #EBEBEF; }
 #sky .grad { position: absolute; left: 0; top: 0; width: 100%; height: 100%; -webkit-transition: opacity 2s; transition: opacity 2s; }
@@ -133,27 +133,6 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .night .tab { color: rgba(245, 245, 247, 0.62); }
 .night .tab.focus { color: #1D1D1F; box-shadow: 0 8px 26px rgba(0, 0, 0, 0.4); }
 
-/* Crypto quotes at the right end of the tab row: a quiet detail. */
-#quotes {
-  position: absolute;
-  right: 80px;
-  top: 178px;
-  height: 28px;
-  font-size: 21px;
-  line-height: 28px;
-  color: #8E8E93;
-  white-space: nowrap;
-  -webkit-transition: opacity 0.17s;
-  transition: opacity 0.17s;
-  -webkit-font-feature-settings: 'tnum';
-  font-feature-settings: 'tnum';
-}
-#quotes .q { display: inline-block; margin-left: 24px; }
-#quotes svg { width: 15px; height: 15px; vertical-align: -1px; margin-right: 6px; fill: rgba(142, 142, 147, 0.7); }
-#quotes.hide { opacity: 0; }
-.night #quotes { color: rgba(245, 245, 247, 0.62); }
-.night #quotes svg { fill: rgba(245, 245, 247, 0.55); }
-
 /* Live TV, HDMI Inputs and Settings: glass circles; the focused one turns white, with its name below. */
 .round {
   position: absolute;
@@ -227,6 +206,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   -webkit-transition: box-shadow 0.22s;
   transition: box-shadow 0.22s;
 }
+/* As Backdrop.card(…, 0): taller than the card, a poster keeps its title and the wide card its photo's top. */
 .card .layer {
   position: absolute;
   left: 0;
@@ -234,7 +214,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   width: 100%;
   height: 100%;
   background-size: cover;
-  background-position: center;
+  background-position: center top;
 }
 .card .back {
   opacity: 0;
@@ -390,7 +370,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .more.back { -webkit-transform: scaleX(-1); transform: scaleX(-1); }
 .night .more { color: rgba(255, 255, 255, 0.8); }
 
-/* MARK: - Drawer: inputs and shortcuts, weather, prices */
+/* MARK: - Drawer: inputs and shortcuts, weather */
 
 .row-title { position: absolute; top: 494px; font-size: 25px; font-weight: 600; color: #6E6E73; white-space: nowrap; }
 .night .row-title { color: rgba(255, 255, 255, 0.7); }
@@ -435,8 +415,15 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 #weather .now .sym { width: 56px; height: 56px; vertical-align: 12px; margin-right: 18px; }
 #weather .now .temp { font-size: 100px; font-weight: 300; line-height: 100px; -webkit-font-feature-settings: 'tnum'; font-feature-settings: 'tnum'; }
 #weather .cond { position: absolute; left: 34px; top: 192px; font-size: 29px; font-weight: 500; white-space: nowrap; }
+/* The line under the condition appears only when it says something; without it the card is main's, exactly. */
+#weather .extra { position: absolute; left: 34px; top: 218px; font-size: 21px; font-weight: 500; color: #6E6E73; white-space: nowrap; max-width: 352px; overflow: hidden; text-overflow: ellipsis; }
 #weather .range { position: absolute; left: 34px; top: 236px; font-size: 23px; font-weight: 500; color: #6E6E73; white-space: nowrap; -webkit-font-feature-settings: 'tnum'; font-feature-settings: 'tnum'; }
 #weather .split { position: absolute; left: 391px; top: 34px; bottom: 34px; width: 2px; background: rgba(0, 0, 0, 0.1); }
+/* With the line: both columns move down together and keep one baseline, and the divider runs to the end of the last row. */
+#weather.with-extra .cond { top: 186px; font-size: 27px; }
+#weather.with-extra .range { top: 248px; }
+#weather.with-extra .sun { top: 248px; }
+#weather.with-extra .split { bottom: 12px; }
 #weather .hours { position: absolute; left: 422px; right: 30px; top: 74px; height: 140px; }
 #weather .hour { position: absolute; top: 0; text-align: center; -webkit-font-feature-settings: 'tnum'; font-feature-settings: 'tnum'; }
 #weather .hour .t { font-size: 22px; font-weight: 500; color: #6E6E73; }
@@ -446,19 +433,8 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 #weather .sun { position: absolute; left: 422px; top: 236px; font-size: 23px; font-weight: 500; color: #6E6E73; white-space: nowrap; }
 #weather .sun .sym { width: 22px; height: 22px; vertical-align: -3px; margin-right: 10px; }
 #weather .sun span { margin-right: 36px; }
-.night #weather .range, .night #weather .hour .t, .night #weather .hour .low, .night #weather .sun { color: rgba(255, 255, 255, 0.68); }
+.night #weather .range, .night #weather .extra, .night #weather .hour .t, .night #weather .hour .low, .night #weather .sun { color: rgba(255, 255, 255, 0.68); }
 .night #weather .split { background: rgba(255, 255, 255, 0.14); }
-
-#prices .coin { position: absolute; left: 34px; right: 34px; height: 40px; font-size: 29px; font-weight: 500; white-space: nowrap; }
-#prices .coin svg { position: absolute; left: 2px; top: 6px; width: 26px; height: 26px; fill: #6E6E73; }
-#prices .coin .n { position: absolute; left: 50px; top: 0; }
-#prices .coin .p { position: absolute; right: 128px; top: 1px; font-size: 26px; -webkit-font-feature-settings: 'tnum'; font-feature-settings: 'tnum'; }
-#prices .coin .c { position: absolute; right: 0; top: 2px; width: 108px; height: 34px; line-height: 34px; border-radius: 17px; text-align: center; font-size: 21px; font-weight: 600; -webkit-font-feature-settings: 'tnum'; font-feature-settings: 'tnum'; }
-#prices .up { color: #248A3D; background: rgba(36, 138, 61, 0.2); }
-#prices .down { color: #D70015; background: rgba(215, 0, 21, 0.2); }
-.night #prices .coin svg { fill: rgba(255, 255, 255, 0.8); }
-.night #prices .up { color: #30D158; background: rgba(48, 209, 88, 0.2); }
-.night #prices .down { color: #FF453A; background: rgba(255, 69, 58, 0.2); }
 
 /* MARK: - Sheets over the home screen: All Apps, Settings, Shelf, Language, About */
 
@@ -545,6 +521,24 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .toggle.on { background: #3FD69B; }
 .toggle.on::after { -webkit-transform: translateX(34px); transform: translateX(34px); }
 
+/* MARK: - Dim: a black layer over the picture, for a dark room (panel brightness needs private APIs) */
+
+#dim { z-index: 6; background: #000; opacity: 0; pointer-events: none; -webkit-transition: opacity 0.5s; transition: opacity 0.5s; }
+#dim.d1 { opacity: 0.28; }
+#dim.d2 { opacity: 0.42; }
+#dim.d3 { opacity: 0.55; }
+
+/* MARK: - The clock screensaver: a large clock and the weather, drifting slowly for OLED panels */
+
+#ambient { z-index: 4; background: #050506; opacity: 0; visibility: hidden; -webkit-transition: opacity 1.1s, visibility 0s 1.1s; transition: opacity 1.1s, visibility 0s 1.1s; }
+#ambient.on { opacity: 1; visibility: visible; -webkit-transition-delay: 0s; transition-delay: 0s; }
+#ambient .shift { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; -webkit-transition: -webkit-transform 9s linear; transition: transform 9s linear; }
+#ambient .clock { position: absolute; left: 96px; top: 238px; font-size: 232px; font-weight: 200; line-height: 0.96; letter-spacing: -0.025em; color: #F5F5F7; -webkit-font-feature-settings: 'tnum'; font-feature-settings: 'tnum'; }
+#ambient .date { position: absolute; left: 108px; top: 512px; font-size: 40px; font-weight: 500; color: rgba(245, 245, 247, 0.55); }
+#ambient .side { position: absolute; right: 108px; top: 250px; width: 660px; text-align: right; color: #F5F5F7; }
+#ambient .temp { font-size: 118px; font-weight: 200; line-height: 1; -webkit-font-feature-settings: 'tnum'; font-feature-settings: 'tnum'; }
+#ambient .cond { margin-top: 8px; font-size: 30px; font-weight: 500; color: rgba(245, 245, 247, 0.6); }
+
 /* MARK: - Screensaver: the picks' photos, slowly moving, and a clock */
 
 #saver { background: #000; opacity: 0; visibility: hidden; -webkit-transition: opacity 1.2s, visibility 0s 1.2s; transition: opacity 1.2s, visibility 0s 1.2s; }
@@ -598,3 +592,10 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 
 /* Tizen 2 and 1 GB TVs (see tv.js): no shadows or animations; their GPUs can't keep up while the focus moves. */
 .lite * { box-shadow: none !important; -webkit-transition: none !important; transition: none !important; }
+
+/* Samsungs up to 2 GB (see tv.js): the parts that move lose their soft shadows, which the TV repainted on every frame of
+   a move, and what slides is a layer from the start, so a move starts at once. */
+.flat .tab, .flat .card .img, .flat .tile, .flat .key { box-shadow: none !important; }
+.flat .cell.focus .face { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4) !important; }
+.flat #home, .flat #drawer, .flat #cards, .flat .card, .flat #tiles, .flat .tile { will-change: transform; }
+.flat #top { will-change: opacity; }

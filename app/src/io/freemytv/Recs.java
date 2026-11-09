@@ -52,6 +52,9 @@ final class Recs {
         String kind;            // "movie" or "tv"
         String title, backdrop, poster, meta = "", app, pkg;   // poster: the portrait image of the narrow cards
         String link;            // opens the title in its app (looked up with Watchmode), or null: the app's home
+        String servicePkg;      // open_in_stremio/-_nuvio: the TV's own app it streams on (pkg is then Stremio's or Nuvio's)
+        String tag;             // Trakt: "Up next: S2 E5", "On your watchlist"…, first in the meta; else null
+        int mine;               // Trakt: PROGRESS, LIKED (watchlist, recommended) or 0 (TMDB's)
         boolean detailed;
         java.io.File photo;     // one of your own photos (Photos): no title, no caption
     }
@@ -66,11 +69,23 @@ final class Recs {
     /** The backdrops: on a 720p UI, TMDB's 1280-wide copy shows the same and is lighter to download and decode. */
     private static final String IMAGES = "https://image.tmdb.org/t/p/" + (Backdrop.W <= 1280 ? "w1280" : "original");
     private static final String POSTERS = "https://image.tmdb.org/t/p/w500";
-    /** TMDB's Animation genre (movies and shows: cartoons and anime), left out with hide_animation=true. */
+    /** TMDB's Animation genre (movies and shows: cartoons and anime), left out with Picks > Cartoons and anime off. */
     private static final int ANIMATION = 16;
     private static final long LIST_EVERY = 6 * 3600_000L;
+    /** How often Trakt is asked whether the account changed (marked watched, the watchlist): one small request. */
+    private static final long TRAKT_EVERY = 10 * 60_000L;
     /** Bump when what is saved for each title changes (the saved list is discarded and fetched again). */
-    private static final int CACHE_VERSION = 5;
+    private static final int CACHE_VERSION = 6;   // 6: lists of up to POOL + TRAKT_MAX
+    /** TMDB's titles in the list (trending, then the new releases), as on main. */
+    private static final int POOL = 24;
+    /** Trakt's titles in the list: about what the tabs show of them (now(): up to 2 in 5 in progress, 3 in 5 liked). */
+    private static final int TRAKT_MAX = MAX_CARDS;
+    /** By subscription, with ads (Pluto TV) or free: never rent or buy. */
+    private static final String WATCH_TYPES = "flatrate%7Cads%7Cfree";
+    /** Images kept on disk: a backdrop and a poster for every title the list can hold. */
+    private static final int FILES = 2 * (POOL + TRAKT_MAX);
+    /** Pick.mine: what they're in the middle of, and what they'd like (watchlist, Trakt's recommendations). */
+    private static final int PROGRESS = 1, LIKED = 2;
     private static final int MANHA = 0, TARDE = 1, NOITE = 2;
     /** Service name on TMDB (part of the name, lowercase) → TV app (HomeApps key, package). */
     private static final String[][] SERVICES = {
@@ -112,8 +127,21 @@ final class Recs {
     };
     /** Services matched by their whole name, where a part would catch another: "WOW Presents Plus", "Belas Artes à La Carte". */
     private static final Set<String> WHOLE_NAME = new HashSet<>(Arrays.asList("wow", "arte"));
+    /**
+     * With open_in_stremio=true and Stremio on the TV: a pick from one of the TV's apps opens on its page in Stremio
+     * (stremio:///detail/<type>/<imdb id>) instead of in that app. Only an Open in: what is picked doesn't change.
+     */
+    private static final String STREMIO = "com.stremio.one";
+    /**
+     * Nuvio (open_in_nuvio): the release APK and Google Play's, the same app. It takes nuvio://tmdb/<type>/<tmdb id>
+     * (its DeepLinkParser), not the stremio:// page above, which it reads only for addon installs. Asked before Stremio:
+     * with both apps on the TV, Nuvio opens.
+     */
+    private static final String[] NUVIO = {"com.nuvio.tv", "com.nuvio.app"};
     private static final Map<String, String> SERVICE_NAME = new HashMap<>();
     static {
+        SERVICE_NAME.put("stremio", "Stremio");
+        SERVICE_NAME.put("nuvio", "Nuvio");
         SERVICE_NAME.put("netflix", "Netflix");
         SERVICE_NAME.put("prime", "Prime Video");
         SERVICE_NAME.put("disney", "Disney+");
@@ -179,12 +207,15 @@ final class Recs {
     private volatile boolean fetching;
     private volatile String error = "";
     private volatile boolean light;     // light design: builds only the cards (all three tabs' cards fit in memory)
-    private volatile long failedAt, keyStamp, linkRetryAt;
+    private volatile long failedAt, keyStamp, traktStamp, linkRetryAt;
     private volatile String listLanguage = "";   // language used for the saved titles, genres and texts
+    private volatile String traktActivity = "";  // Trakt's last change when the picks were fetched
+    private volatile long traktCheckedAt;
 
     private Recs(Context c) {
         context = c;
         cache = c.getSharedPreferences("recs", Context.MODE_PRIVATE);
+        byName = readByName(c);
         if (cache.getInt("version", 0) != CACHE_VERSION) cache.edit().clear().putInt("version", CACHE_VERSION).apply();
         try {
             String saved = cache.getString("picks", null);
@@ -193,6 +224,8 @@ final class Recs {
             listAt = cache.getLong("listAt", 0);
             listLanguage = cache.getString("language", cache.getBoolean("english", false) ? "en" : "pt");
             keyStamp = cache.getLong("keyStamp", 0);
+            traktStamp = cache.getLong("traktStamp", 0);
+            traktActivity = cache.getString("traktActivity", "");
         } catch (Exception ignored) {
         }
         // Right after the TV starts, the first fetch runs before the Wi-Fi is up and fails, which would hold the old
@@ -239,6 +272,20 @@ final class Recs {
         return cachedKey;
     }
 
+    private static volatile String cachedWatchmodeKey = "";
+    private static volatile int watchmodeKeyVersion = -1;
+
+    /** The Watchmode key given on the TV, else the one built in from config.properties. Asked while drawing, as key(). */
+    static String watchmodeKey() {
+        int version = Prefs.version;
+        if (version != watchmodeKeyVersion) {
+            String given = Prefs.watchmodeKey();
+            cachedWatchmodeKey = given.isEmpty() ? Config.WATCHMODE_KEY.trim() : given;
+            watchmodeKeyVersion = version;
+        }
+        return cachedWatchmodeKey;
+    }
+
     /**
      * A key as pasted (spaces, line breaks taken out), or "" when it can't be one: an API key (32 hex digits) or an API
      * Read Access Token (a JWT, "eyJ…").
@@ -260,6 +307,18 @@ final class Recs {
             return Ui.trf("Couldn't reach TMDB: {error}", "error", e.getMessage());
         } catch (RuntimeException e) {   // never out of KeyPage's thread (the watchdog counts it); the name only: no header value
             return Ui.trf("Couldn't reach TMDB: {error}", "error", e.getClass().getSimpleName());
+        }
+    }
+
+    /** Asks Watchmode whether a key works, before it's saved: null if it does, else why not. The key is in the URL: only our own message or the error's name. */
+    static String checkWatchmodeKey(String key) {
+        try {
+            watchmode("/status/", key);
+            return null;
+        } catch (IOException | RuntimeException e) {
+            String message = String.valueOf(e.getMessage());
+            if ("Watchmode returned HTTP 401".equals(message)) return Ui.tr("Watchmode refused this key.");
+            return Ui.trf("Couldn't reach Watchmode: {error}", "error", message.startsWith("Watchmode returned") ? message : e.getClass().getSimpleName());
         }
     }
 
@@ -301,31 +360,45 @@ final class Recs {
         return now(null);
     }
 
-    /** This hour's picks, movies only ("movie") or shows only ("tv"); null = both (the home screen tabs). */
+    /** This hour's Prefs.cards(), movies only ("movie") or shows only ("tv"); null = both (the home screen tabs). */
     List<Pick> now(String kind) {
-        List<Pick> list = new ArrayList<>();
-        if (!hasKey(context)) return list;    // no TMDB key: no recommendations
+        List<Pick> out = new ArrayList<>();
+        if (!hasKey(context)) return out;    // no TMDB key: no recommendations
+        List<Pick> progress = new ArrayList<>(), liked = new ArrayList<>(), list = new ArrayList<>();
         Map<String, Boolean> have = new HashMap<>();   // one look per app, not per title (this runs every 15 s)
         for (Pick p : picks) {
             if ((kind == null || kind.equals(p.kind))
-                    && (!p.detailed || (p.pkg != null && have.computeIfAbsent(p.pkg, this::installed)))) list.add(p);   // app missing or switched off: skip
+                    && (!p.detailed || (p.pkg != null && have.computeIfAbsent(p.pkg, this::installed)
+                    && (p.servicePkg == null || have.computeIfAbsent(p.servicePkg, this::installed))))) {   // app missing or switched off: skip
+                (p.mine == PROGRESS ? progress : p.mine == LIKED ? liked : list).add(p);
+            }
         }
-        if (list.isEmpty()) return list;
         long hour = System.currentTimeMillis() / 3600_000L;
-        // Prefs.cards() per hour, never two from the same franchise ("Law & Order" and "Law & Order: Special…").
-        List<Pick> out = new ArrayList<>();
-        java.util.Set<String> seen = new java.util.HashSet<>();
+        // Trakt first: what they're in the middle of (as Trakt orders it), up to 2 in 5 cards, then their watchlist and
+        // Trakt's recommendations, up to 3 in 5 with those; then TMDB's. A new set each hour; Trakt's fill the rest when
+        // TMDB's run short. Never two from the same franchise ("Law & Order" and "Law & Order: Special…").
         int cards = Prefs.cards();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        take(out, seen, progress, 0, Math.max(1, cards * 2 / 5));
+        take(out, seen, liked, hour * cards, Math.max(2, cards * 3 / 5));
+        take(out, seen, list, hour * cards, cards);
+        take(out, seen, progress, 0, cards);
+        take(out, seen, liked, hour * cards, cards);
+        return out;
+    }
+
+    /** Up to `max` in `out`, starting `start` into `from` (wrapping around), one per franchise. */
+    private static void take(List<Pick> out, java.util.Set<String> seen, List<Pick> from, long start, int max) {
         boolean plex = false;
-        for (int i = 0; i < list.size() && out.size() < cards; i++) {
-            Pick p = list.get((int) ((hour * cards + i) % list.size()));
+        for (Pick p : out) plex |= p.id < 0;
+        for (int i = 0; i < from.size() && out.size() < max; i++) {
+            Pick p = from.get((int) ((start + i) % from.size()));
             if (p.id < 0 && plex) continue;   // a Plex title is the surprise: one per tab, not the movie and the show together
             if (seen.add(franchise(p.title))) {
                 out.add(p);
                 plex |= p.id < 0;
             }
         }
-        return out;
     }
 
     /** "Law & Order: Special Victims Unit" → "law & order" (what comes before ":" or " - "). */
@@ -338,7 +411,99 @@ final class Recs {
 
     /** Name of the service the pick is on ("Netflix"), or empty. */
     static String serviceName(Pick p) {
-        return p == null || p.app == null ? "" : SERVICE_NAME.get(p.app);
+        return p == null || p.app == null ? "" : name(p.app);
+    }
+
+    /**
+     * Services SERVICES doesn't know, found by name: a TMDB service in REGION named like a TV app ("Oldflix"). As SERVICES
+     * rows {plain TMDB name, key = package, package, app name}, from the last list (recs-services.json, which the settings
+     * read in another process). They start off in Picks from.
+     */
+    private static volatile List<String[]> byName = new ArrayList<>();
+
+    /** Not by name: Plex's TMDB entry is its free catalogue, not the person's library (#135); YouTube would join on almost every TV. */
+    private static final Set<String> NOT_BY_NAME = new HashSet<>(Arrays.asList("plex", "youtube"));
+
+    /** hasTitles' answers for a day, by provider (only on `io`): a TV without the known services lists again every 10 minutes. */
+    private final Map<Integer, Boolean> titlesKnown = new HashMap<>();
+    private long titlesAt;
+
+    private static String name(String key) {
+        String known = SERVICE_NAME.get(key);
+        if (known != null) return known;
+        for (String[] s : byName) if (s[1].equals(key)) return s[3];
+        return "";
+    }
+
+    /** "Oldflix" and "OLDFLIX", "Claro video" and "Claro Vídeo": compared without case, accents or punctuation, in any script. */
+    static String plain(String name) {
+        String n = java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFKD).replaceAll("\\p{M}", "");
+        return n.toLowerCase(Locale.ROOT).replace("+", " plus").replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
+    }
+
+    private static List<String[]> readByName(Context c) {
+        List<String[]> out = new ArrayList<>();
+        try (FileInputStream in = new FileInputStream(new File(c.getFilesDir(), "recs-services.json"))) {
+            JSONArray a = new JSONArray(read(in));
+            for (int i = 0; i < a.length(); i++) {
+                JSONArray s = a.getJSONArray(i);
+                out.add(new String[] {s.getString(0), s.getString(1), s.getString(2), s.getString(3)});
+            }
+        } catch (Exception ignored) {   // none found yet
+        }
+        return out;
+    }
+
+    /** Through a temporary file per process (the screensaver has its own Recs on Android 11 to 12L): the settings read it. */
+    private void writeByName(List<String[]> found) {
+        JSONArray a = new JSONArray();
+        for (String[] s : found) a.put(new JSONArray(Arrays.asList(s)));
+        File tmp = new File(context.getFilesDir(), "recs-services." + android.os.Process.myPid() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(a.toString().getBytes(StandardCharsets.UTF_8));
+            out.getFD().sync();
+        } catch (IOException e) {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            return;
+        }
+        //noinspection ResultOfMethodCallIgnored
+        tmp.renameTo(new File(context.getFilesDir(), "recs-services.json"));
+    }
+
+    /**
+     * Whether a title's own list has the service by subscription, with ads or free. /discover alone can't say: it matches the service and
+     * the type separately, so a store that only rents a title also comes back when someone else streams it.
+     */
+    private boolean hasTitles(int provider) {
+        long now = System.currentTimeMillis();
+        if (now - titlesAt > 24 * 3600_000L || now < titlesAt) {
+            titlesKnown.clear();
+            titlesAt = now;
+        }
+        Boolean known = titlesKnown.get(provider);
+        if (known != null) return known;
+        try {
+            boolean found = false;
+            for (String kind : new String[] {"movie", "tv"}) {
+                JSONArray titles = get("/discover/" + kind + "?language=" + lang() + "&watch_region=" + REGION + "&with_watch_monetization_types=" + WATCH_TYPES
+                        + "&include_adult=false&sort_by=popularity.desc&with_watch_providers=" + provider).getJSONArray("results");
+                for (int i = 0; i < titles.length() && i < 5 && !found; i++) {
+                    JSONObject br = get("/" + kind + "/" + titles.getJSONObject(i).getInt("id") + "/watch/providers?language=" + lang())
+                            .getJSONObject("results").optJSONObject(REGION);
+                    for (String type : new String[] {"flatrate", "ads", "free"}) {
+                        JSONArray list = br == null ? null : br.optJSONArray(type);
+                        for (int j = 0; list != null && j < list.length(); j++) found |= list.getJSONObject(j).optInt("provider_id") == provider;
+                    }
+                }
+                if (found) break;
+            }
+            titlesKnown.put(provider, found);
+            return found;
+        } catch (Exception e) {   // not kept: the next list asks again
+            AppLog.w("recs: titles of service " + provider + ": " + e.getMessage());
+        }
+        return false;
     }
 
     /** The pick's ready backdrop (or null: builds it in the background and notifies when it's ready). */
@@ -374,19 +539,43 @@ final class Recs {
         long now = System.currentTimeMillis();
         long stamp = sourceStamp();   // a new key, country, animation choice or installed streaming-app set refetches
         boolean newKey = stamp != keyStamp;
+        // Signing in or out of Trakt fetches the list again, judged only in :home: the screensaver's process on Android
+        // 11 to 12L has no Trakt, and must not take the saved list for another account's.
+        long trakt = Trakt.available() ? Trakt.stamp(context) : traktStamp;
+        boolean newTrakt = trakt != traktStamp;
         long sinceFail = now - failedAt;    // negative = the clock went back: don't wait
-        if (!newKey && failedAt != 0 && sinceFail >= 0 && sinceFail < 10 * 60_000L) return;
+        if (!newKey && !newTrakt && failedAt != 0 && sinceFail >= 0 && sinceFail < 10 * 60_000L) return;
         int p = period(now);
         boolean stale = newKey || p != period || now - listAt > LIST_EVERY || now < listAt || picks.isEmpty()
                 || !listLanguage.equals(Ui.language);
         boolean missing = false;
         for (Pick pick : wanted()) missing |= !pick.detailed || !hasImage(pick) || needsLink(pick);
-        if (!stale && !missing) return;
+        boolean checkTrakt = !stale && !newTrakt && Trakt.signedIn(context) && (now - traktCheckedAt > TRAKT_EVERY || now < traktCheckedAt);
+        if (!stale && !missing && !checkTrakt && !newTrakt) return;
         keyStamp = stamp;
+        traktStamp = trakt;
         fetching = true;
+        if (checkTrakt) traktCheckedAt = now;
         io.execute(() -> {
             try {
-                if (stale) fetchList(p);
+                boolean list = stale || newTrakt;
+                if (checkTrakt) {
+                    try {
+                        String activity = Trakt.activity(context);
+                        if (!activity.isEmpty() && !activity.equals(traktActivity)) {
+                            AppLog.w("trakt: the account changed, fetching the picks again");
+                            list = true;
+                        }
+                    } catch (Exception e) {
+                        AppLog.w("trakt activity: " + e.getMessage());
+                    }
+                }
+                if (list) {
+                    // Only the Trakt account changed: the titles already in the list keep their details.
+                    Map<String, Pick> known = new HashMap<>();
+                    if (!stale) for (Pick k : picks) if (k.detailed) known.put(key(k), k);
+                    fetchList(p, known);
+                }
                 // One failing title doesn't stop the others; whatever has no app on the TV is not downloaded.
                 int failures = 0, tried = 0;
                 String last = "";
@@ -439,6 +628,7 @@ final class Recs {
         Map<String, Boolean> have = new HashMap<>();
         for (Pick p : picks) {
             if (p.detailed && p.pkg != null && have.computeIfAbsent(p.pkg, this::installed) && hasImage(p)
+                    && (p.servicePkg == null || have.computeIfAbsent(p.servicePkg, this::installed))
                     && seen.add(franchise(p.title))) out.add(p);
         }
         return out;
@@ -457,8 +647,13 @@ final class Recs {
         if (!hasKey(context) || fetching) return;
         long sinceFail = System.currentTimeMillis() - failedAt;
         if (failedAt != 0 && sinceFail >= 0 && sinceFail < 10 * 60_000L) return;
+        // The list's titles only up to what prune() keeps: more would be downloaded again every minute.
+        List<Pick> list = picks;
         List<Pick> todo = new ArrayList<>();
-        for (Pick p : picks) if (!p.detailed || (p.pkg != null && !hasImage(p))) todo.add(p);
+        for (int i = 0; i < list.size() && i < POOL + TRAKT_MAX; i++) {
+            Pick p = list.get(i);
+            if (!p.detailed || (p.pkg != null && !hasImage(p))) todo.add(p);
+        }
         if (todo.isEmpty()) return;
         fetching = true;
         io.execute(() -> {
@@ -488,7 +683,7 @@ final class Recs {
         });
     }
 
-    /** This hour's picks for the three tabs (Explore, Movies, Shows), without repeats. */
+    /** This hour's picks for the TMDB tabs (Explore, Movies, Shows), without repeats. */
     List<Pick> wanted() {
         List<Pick> out = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
@@ -509,25 +704,61 @@ final class Recs {
 
     // MARK: - TMDB
 
-    private void fetchList(int p) throws Exception {
-        // None of the services we know is on the TV (or hide_services hides them all): no region would change that.
+    private void fetchList(int p, Map<String, Pick> known) throws Exception {
+        // Whether a service we know is on the TV (and not hidden): with none, and none found by name, the error says so.
         boolean any = false;
         for (String[] s : SERVICES) any |= installed(s[2]);
-        if (!any) throw new IOException(NO_KNOWN_APPS);
         // The services the TV has, by their TMDB ids in your region.
         Map<Integer, String[]> services = new HashMap<>();
         JSONArray providers = get("/watch/providers/movie?language=" + lang() + "&watch_region=" + REGION).getJSONArray("results");
+        // The TV's other apps by name: a service SERVICES doesn't know is theirs when the names are the same.
+        Map<String, String[]> apps = new HashMap<>();
+        Set<String> knownPkgs = new HashSet<>();
+        for (String[] s : SERVICES) knownPkgs.add(s[2]);
+        for (String[] app : HomeApps.launchable(context)) {
+            String label = plain(app[1]);
+            if (!label.isEmpty() && !NOT_BY_NAME.contains(label) && !knownPkgs.contains(app[0])) apps.put(label, app);
+        }
+        List<String[]> found = new ArrayList<>();
         for (int i = 0; i < providers.length(); i++) {
             JSONObject o = providers.getJSONObject(i);
-            String[] s = service(o.optString("provider_name"), o.optInt("provider_id"));
-            if (s != null && installed(s[2])) services.put(o.getInt("provider_id"), s);
+            String name = o.optString("provider_name");
+            String[] s = service(name, o.optInt("provider_id"));
+            if (s == null || !SERVICE_NAME.containsKey(s[1])) {
+                String[] app = apps.get(plain(name));
+                // A name that only rents or buys waits until it has titles.
+                s = app != null && hasTitles(o.optInt("provider_id")) ? new String[] {plain(name), app[0], app[0], app[1]} : null;
+                if (s != null) found.add(s);
+            }
+            // serviceOff too: installed() knows only the last list's names, and one found just now starts off.
+            if (s != null && installed(s[2]) && !Prefs.serviceOff(s[1])) services.put(o.getInt("provider_id"), s);
         }
-        if (services.isEmpty()) throw new IOException(NO_APPS);
+        byName = found;
+        writeByName(found);
+        if (services.isEmpty()) throw new IOException(any ? NO_APPS : NO_KNOWN_APPS);
+        // Signed in to Trakt: what they're in the middle of comes first, then their watchlist and Trakt's
+        // recommendations; what they've watched stays out. Trakt failing leaves the picks as they'd be without it.
+        // The list keeps the account it was made with (0: none, and always outside :home), so a list the screensaver's
+        // process made on Android 11 to 12L is fetched again when :home starts with it.
+        long account = Trakt.stamp(context);
+        Trakt.Lists trakt = null;
+        if (account != 0) {
+            try {
+                trakt = Trakt.lists(context);
+            } catch (Exception e) {
+                AppLog.w("trakt: " + e.getMessage());
+            }
+        }
+        final Set<String> watched = trakt == null ? new HashSet<>() : trakt.watched;
+        if (trakt != null) {
+            traktActivity = trakt.activity;
+            traktCheckedAt = System.currentTimeMillis();
+        }
         StringBuilder ids = new StringBuilder();
         for (int id : services.keySet()) ids.append(ids.length() == 0 ? "" : "|").append(id);
-        String common = "&language=" + lang() + "&watch_region=" + REGION + "&with_watch_monetization_types=flatrate&include_adult=false"
+        String common = "&language=" + lang() + "&watch_region=" + REGION + "&with_watch_monetization_types=" + WATCH_TYPES + "&include_adult=false"
                 + "&sort_by=popularity.desc&with_watch_providers=" + URLEncoder.encode(ids.toString(), "UTF-8")
-                + (Config.HIDE_ANIMATION ? "&without_genres=" + ANIMATION : "");
+                + (Prefs.hideAnimation() ? "&without_genres=" + ANIMATION : "");
         // 1. Trending this week (TMDB goes by what people are watching and searching for right now), only what is
         //    on one of the TV's services: the details say where (and are then ready).
         List<Pick> hotMovies = new ArrayList<>(), hotShows = new ArrayList<>();
@@ -536,8 +767,9 @@ final class Recs {
             List<Pick> candidates = new ArrayList<>();
             for (int i = 0; i < hot.length() && i < 20; i++) add(candidates, hot.getJSONObject(i), kind);
             for (Pick pick : candidates) {
+                if (watched.contains(key(pick))) continue;
                 try {
-                    fetchDetails(pick);
+                    if (!reuse(pick, known)) fetchDetails(pick);
                 } catch (Exception e) {
                     continue;
                 }
@@ -553,6 +785,18 @@ final class Recs {
         List<Pick> newMovies = new ArrayList<>(), newShows = new ArrayList<>();
         for (int i = 0; i < movies.length(); i++) add(newMovies, movies.getJSONObject(i), "movie");
         for (int i = 0; i < shows.length(); i++) add(newShows, shows.getJSONObject(i), "tv");
+        newMovies.removeIf(x -> watched.contains(key(x)));
+        newShows.removeIf(x -> watched.contains(key(x)));
+        // Services with mostly older titles (free ones like Pluto TV) have few or no new ones: their most popular
+        // fill the rest, so a tab doesn't show empty cards.
+        if (newMovies.size() < MAX_CARDS) {
+            JSONArray more = get("/discover/movie?vote_count.gte=30" + common).getJSONArray("results");
+            for (int i = 0; i < more.length(); i++) add(newMovies, more.getJSONObject(i), "movie");
+        }
+        if (newShows.size() < MAX_CARDS) {
+            JSONArray more = get("/discover/tv?vote_count.gte=20" + common).getJSONArray("results");
+            for (int i = 0; i < more.length(); i++) add(newShows, more.getJSONObject(i), "tv");
+        }
         // One title of your Plex library per kind (one of the newest 8, another each time the list is made) among the
         // trending ones: a surprise, not half the row. Its images come now, so a server that sleeps later leaves no gray card.
         if (plexOn()) {
@@ -566,16 +810,88 @@ final class Recs {
         } else if (!Config.PLEX_URL.trim().isEmpty()) {
             AppLog.w("plex: plex_url must be an https://….plex.direct address (and plex_token set): ignored");
         }
-        // Trending first, then the new releases; movies and shows alternating, without repeats, up to 24.
+        newMovies.removeIf(x -> watched.contains(key(x)));
+        newShows.removeIf(x -> watched.contains(key(x)));
+        List<Pick> progress = new ArrayList<>(), listMovies = new ArrayList<>(), listShows = new ArrayList<>();
+        List<Pick> recMovies = new ArrayList<>(), recShows = new ArrayList<>();
+        if (trakt != null) {
+            // Up to TRAKT_MAX, about what the tabs show: in progress, up to what a tab shows of each kind; then the
+            // watchlist and the recommendations, movies and shows alike. Each title costs a TMDB request, so once
+            // there are enough the rest aren't looked up.
+            int few = MAX_CARDS * 2 / 5, movieCount = 0, showCount = 0;
+            for (Trakt.Progress pr : trakt.progress) {
+                boolean movie = pr.key.startsWith("movie:");
+                if ((movie ? movieCount : showCount) >= few) continue;
+                String tag = pr.season == 0 ? Ui.tr("Continue watching")
+                        : pr.paused ? Ui.trf("Continue: S{s} E{e}", "s", pr.season, "e", pr.episode)
+                        : Ui.trf("Up next: S{s} E{e}", "s", pr.season, "e", pr.episode);
+                if (fromTrakt(pr.key, tag, PROGRESS, progress, known)) {
+                    if (movie) movieCount++;
+                    else showCount++;
+                }
+            }
+            int each = (TRAKT_MAX - progress.size() + 1) / 2;
+            for (String k : trakt.watchlistMovies) if (listMovies.size() < each && !watched.contains(k)) fromTrakt(k, Ui.tr("On your watchlist"), LIKED, listMovies, known);
+            for (String k : trakt.watchlistShows) if (listShows.size() < each && !watched.contains(k)) fromTrakt(k, Ui.tr("On your watchlist"), LIKED, listShows, known);
+            for (String k : trakt.recommendedMovies) if (listMovies.size() + recMovies.size() < each && !watched.contains(k)) fromTrakt(k, Ui.tr("Recommended on Trakt"), LIKED, recMovies, known);
+            for (String k : trakt.recommendedShows) if (listShows.size() + recShows.size() < each && !watched.contains(k)) fromTrakt(k, Ui.tr("Recommended on Trakt"), LIKED, recShows, known);
+            // Only titles on one of the TV's apps show; the log says how many that left.
+            AppLog.w("trakt: " + trakt.progress.size() + " in progress (" + progress.size() + " on the TV's apps), "
+                    + (trakt.watchlistMovies.size() + trakt.watchlistShows.size()) + " on the watchlist (" + (listMovies.size() + listShows.size())
+                    + "), " + (trakt.recommendedMovies.size() + trakt.recommendedShows.size()) + " recommended (" + (recMovies.size() + recShows.size()) + ")");
+        }
+        // Trakt's (in progress, the watchlist, the recommendations), then trending and the new releases; movies and
+        // shows alternating, without repeats, up to POOL of TMDB's.
         List<Pick> list = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
-        alternate(list, seen, hotMovies, hotShows, 24);
-        alternate(list, seen, newMovies, newShows, 24);
+        for (Pick x : progress) if (seen.add(key(x))) list.add(x);
+        alternate(list, seen, listMovies, listShows, TRAKT_MAX);
+        alternate(list, seen, recMovies, recShows, TRAKT_MAX);
+        int ours = list.size();
+        alternate(list, seen, hotMovies, hotShows, ours + POOL);
+        alternate(list, seen, newMovies, newShows, ours + POOL);
         if (list.isEmpty()) throw new IOException("TMDB returned no recommendations");
         picks = list;
+        traktStamp = account;
         period = p;
         listAt = System.currentTimeMillis();
         listLanguage = Ui.language;
+    }
+
+    /** A Trakt title ("movie:603") with its details, added to `out` when it's on one of the TV's services. */
+    private boolean fromTrakt(String k, String tag, int mine, List<Pick> out, Map<String, Pick> known) {
+        Pick p = new Pick();
+        p.kind = k.substring(0, k.indexOf(':'));
+        p.id = Integer.parseInt(k.substring(k.indexOf(':') + 1));
+        p.title = "";
+        p.tag = tag;
+        p.mine = mine;
+        try {
+            if (!reuse(p, known)) fetchDetails(p);
+        } catch (Exception e) {
+            return false;
+        }
+        if (p.pkg == null || p.backdrop == null) return false;
+        out.add(p);
+        return true;
+    }
+
+    /** The details of the same title in the list before (`known`), with this one's tag; false: not there. */
+    private static boolean reuse(Pick p, Map<String, Pick> known) {
+        Pick k = known.get(key(p));
+        if (k == null) return false;
+        p.title = k.title;
+        p.backdrop = k.backdrop;
+        p.poster = k.poster;
+        p.app = k.app;
+        p.pkg = k.pkg;
+        p.servicePkg = k.servicePkg;
+        p.link = k.link;
+        String meta = k.meta == null ? "" : k.meta;
+        if (k.tag != null && meta.startsWith(k.tag)) meta = meta.substring(k.tag.length()).replaceFirst("^ · ", "");
+        p.meta = p.tag == null ? meta : meta.isEmpty() ? p.tag : p.tag + " · " + meta;
+        p.detailed = true;
+        return true;
     }
 
     /** Language of titles and genres (TMDB's "fr-FR", "zh-CN"…); the services come from the region. */
@@ -636,7 +952,7 @@ final class Recs {
     private static void add(List<Pick> list, JSONObject o, String kind) {
         String backdrop = o.optString("backdrop_path", "");
         if (backdrop.isEmpty() || "null".equals(backdrop)) return;
-        if (Config.HIDE_ANIMATION && animated(o)) return;
+        if (Prefs.hideAnimation() && animated(o)) return;
         Pick p = new Pick();
         p.id = o.optInt("id");
         p.kind = kind;
@@ -664,12 +980,13 @@ final class Recs {
     /** Genre, runtime (or seasons) and the service it's on, among the ones the TV has. */
     private void fetchDetails(Pick p) throws Exception {
         JSONObject o = get("/" + p.kind + "/" + p.id
-                + "?language=" + lang() + "&append_to_response=watch/providers,images&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
+                + "?language=" + lang() + "&append_to_response=watch/providers,images" + (Config.OPEN_IN_STREMIO ? ",external_ids" : "") + "&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
         p.title = title(p, o);
         String poster = o.optString("poster_path", "");
         if (!poster.isEmpty() && !"null".equals(poster)) p.poster = poster;
         String best = bestBackdrop(o.optJSONObject("images"));
         if (best != null) p.backdrop = best;
+        else if (p.backdrop == null && !o.isNull("backdrop_path")) p.backdrop = o.optString("backdrop_path");   // a watchlist title
         List<String> parts = new ArrayList<>();
         JSONArray genres = o.optJSONArray("genres");
         if (p.kind.equals("tv")) parts.add(Ui.tr("Series"));
@@ -681,15 +998,33 @@ final class Recs {
         if (length != null) parts.add(length);
         JSONObject wp = o.optJSONObject("watch/providers");
         JSONObject br = wp == null ? null : wp.optJSONObject("results") == null ? null : wp.optJSONObject("results").optJSONObject(REGION);
-        JSONArray flat = br == null ? null : br.optJSONArray("flatrate");
-        for (int i = 0; flat != null && i < flat.length() && p.app == null; i++) {
-            String[] s = service(flat.getJSONObject(i).optString("provider_name"), flat.getJSONObject(i).optInt("provider_id"));
-            if (s != null && installed(s[2])) {
-                p.app = s[1];
-                p.pkg = s[2];
+        // A subscription first, then a free service with ads (Pluto TV, Tubi), then a free one: never rent or buy.
+        for (String type : new String[] {"flatrate", "ads", "free"}) {
+            JSONArray list = br == null ? null : br.optJSONArray(type);
+            for (int i = 0; list != null && i < list.length() && p.app == null; i++) {
+                String[] s = service(list.getJSONObject(i).optString("provider_name"), list.getJSONObject(i).optInt("provider_id"));
+                if (s != null && installed(s[2])) {
+                    p.app = s[1];
+                    p.pkg = s[2];
+                }
             }
         }
-        if (p.app != null) parts.add(SERVICE_NAME.get(p.app));
+        if (p.app != null) parts.add(name(p.app));
+        if (p.tag != null) parts.add(0, p.tag);
+        JSONObject ext = o.optJSONObject("external_ids");
+        String imdb = ext == null ? "" : ext.optString("imdb_id", "");
+        String nuvio = p.app == null ? null : nuvio();
+        if (nuvio != null) {     // the meta still names the TV's app it's on
+            p.servicePkg = p.pkg;   // its switch in Picks from (and the app itself) still decide whether it shows
+            p.app = "nuvio";
+            p.pkg = nuvio;
+            p.link = nuvioLink(p.kind, p.id);
+        } else if (p.app != null && stremio() && imdb.startsWith("tt")) {
+            p.servicePkg = p.pkg;
+            p.app = "stremio";
+            p.pkg = STREMIO;
+            p.link = "stremio:///detail/" + (p.kind.equals("movie") ? "movie" : "series") + "/" + imdb;
+        }
         p.meta = String.join(" · ", parts);
         p.detailed = true;
     }
@@ -762,6 +1097,7 @@ final class Recs {
             if (installed(s[2])) return s;
             if (first == null) first = s;
         }
+        if (first == null) for (String[] s : byName) if (s[0].equals(plain(name))) return s;
         return first;
     }
 
@@ -772,6 +1108,9 @@ final class Recs {
         for (String[] s : SERVICES) {
             if (HomeApps.launchIntent(c.getPackageManager(), s[2]) != null && seen.add(s[1])) out.add(new String[] {s[1], SERVICE_NAME.get(s[1])});
         }
+        for (String[] s : readByName(c)) {
+            if (HomeApps.launchIntent(c.getPackageManager(), s[2]) != null && seen.add(s[1])) out.add(new String[] {s[1], s[3]});
+        }
         return out;
     }
 
@@ -781,12 +1120,35 @@ final class Recs {
      */
     private boolean installed(String pkg) {
         for (String[] s : SERVICES) if (s[2].equals(pkg) && Prefs.serviceOff(s[1])) return false;
+        for (String[] s : byName) if (s[2].equals(pkg) && Prefs.serviceOff(s[1])) return false;
         return HomeApps.launchIntent(context.getPackageManager(), pkg) != null;
     }
 
+    private boolean stremio() {
+        return Config.OPEN_IN_STREMIO && HomeApps.launchIntent(context.getPackageManager(), STREMIO) != null;
+    }
+
+    /** Nuvio's package when open_in_nuvio is on and the app is on the TV: the release APK first, else Google Play's. */
+    private String nuvio() {
+        if (!Config.OPEN_IN_NUVIO) return null;
+        for (String pkg : NUVIO) if (HomeApps.launchIntent(context.getPackageManager(), pkg) != null) return pkg;
+        return null;
+    }
+
+    /** Nuvio's own page for a title (nuvio://tmdb/movie/603), as the web app sends it to the TV on LG and Samsung. */
+    static String nuvioLink(String kind, long id) {
+        return "nuvio://tmdb/" + ("movie".equals(kind) ? "movie" : "series") + "/" + id;
+    }
+
     private long sourceStamp() {
-        long stamp = ((key().hashCode() * 31L + REGION.hashCode()) * 31L + (Config.HIDE_ANIMATION ? 1 : 0)) * 31L + Config.PLEX_URL.hashCode();
+        long stamp = ((key().hashCode() * 31L + REGION.hashCode()) * 31L + (Prefs.hideAnimation() ? 1 : 0)) * 31L + Config.PLEX_URL.hashCode();
+        if (stremio()) stamp = stamp * 31L + 1;   // off: the same stamp as before, so nothing is fetched again
+        String nuvio = nuvio();
+        if (nuvio != null) stamp = stamp * 31L + nuvio.hashCode();
         for (String[] service : SERVICES) stamp = stamp * 31L + (installed(service[2]) ? service[2].hashCode() : 0);
+        // Switched on, one found by name counts; off, finding it changes nothing, so nothing is fetched again (a 0 would:
+        // it still multiplies the stamp by 31).
+        for (String[] service : byName) if (installed(service[2])) stamp = stamp * 31L + service[2].hashCode();
         return stamp;
     }
 
@@ -806,7 +1168,7 @@ final class Recs {
      * the home screen: with Continue Watching or the clock there, nothing opens them, so no lookups spend the quota.
      */
     private boolean linksOn() {
-        String key = Config.WATCHMODE_KEY.trim();
+        String key = watchmodeKey();
         return !key.isEmpty() && cache.getInt("wm:refused", 0) != key.hashCode() && Prefs.topContent().equals(Prefs.TOP_PICKS);
     }
 
@@ -821,20 +1183,23 @@ final class Recs {
         if (System.currentTimeMillis() < linkRetryAt) return;
         try {
             String link = "";
-            JSONArray found = new JSONObject(watchmode("/search/?search_field=tmdb_" + p.kind + "_id&search_value=" + p.id))
+            JSONArray found = new JSONObject(watchmode("/search/?search_field=tmdb_" + p.kind + "_id&search_value=" + p.id, watchmodeKey()))
                     .optJSONArray("title_results");
             if (found != null && found.length() > 0) {
-                JSONArray sources = new JSONArray(watchmode("/title/" + found.getJSONObject(0).getInt("id") + "/sources/?regions=" + REGION));
+                JSONArray sources = new JSONArray(watchmode("/title/" + found.getJSONObject(0).getInt("id") + "/sources/?regions=" + REGION, watchmodeKey()));
                 String[] service = null;
                 for (String[] s : SERVICES) if (s[1].equals(p.app)) service = s;
+                for (String[] s : byName) if (s[1].equals(p.app)) service = s;
                 for (int i = 0; service != null && i < sources.length() && link.isEmpty(); i++) {
                     JSONObject s = sources.getJSONObject(i);
-                    String name = s.optString("name").toLowerCase(Locale.ROOT).replace(" ", "");
+                    String words = s.optString("name").toLowerCase(Locale.ROOT), name = words.replace(" ", "");
                     String want = service[0].replace(" ", "");
                     // Not a channel sold inside another app ("AppleTV+ Amazon Channel", "Paramount+ (Via Amazon Prime)"):
                     // that link opens Amazon or Apple's app, not the one the pick is for.
                     boolean resold = name.contains("channel") || name.contains("(via");
-                    boolean same = !resold && (want.equals("max") || WHOLE_NAME.contains(want) ? name.equals(want) : name.contains(want));
+                    // Max as a word, as for TMDB's providers: Watchmode calls it "HBO Max" again, and Cinemax isn't it.
+                    boolean same = !resold && (want.equals("max") ? words.matches(".*\\bmax\\b.*")
+                            : WHOLE_NAME.contains(want) ? name.equals(want) : name.contains(want));
                     if (same && s.optString("type").equals("sub") && s.optString("web_url").startsWith("https://")) link = s.optString("web_url");
                 }
             }
@@ -842,16 +1207,16 @@ final class Recs {
             p.link = link.isEmpty() ? null : link;
         } catch (Exception e) {
             if ("Watchmode returned HTTP 401".equals(e.getMessage())) {
-                cache.edit().putInt("wm:refused", Config.WATCHMODE_KEY.trim().hashCode()).apply();
+                cache.edit().putInt("wm:refused", watchmodeKey().hashCode()).apply();
             }
             linkRetryAt = System.currentTimeMillis() + 10 * 60_000L;   // quota or network: not again right away
             AppLog.w("watchmode: " + e.getMessage());
         }
     }
 
-    private static String watchmode(String path) throws IOException {
+    private static String watchmode(String path, String key) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL("https://api.watchmode.com/v1" + path + (path.contains("?") ? "&" : "?")
-                + "apiKey=" + URLEncoder.encode(Config.WATCHMODE_KEY.trim(), "UTF-8")).openConnection();
+                + "apiKey=" + URLEncoder.encode(key, "UTF-8")).openConnection();
         c.setConnectTimeout(8000);
         c.setReadTimeout(10000);
         try {
@@ -1055,7 +1420,9 @@ final class Recs {
             f.delete();
             return null;
         }
-        Bitmap card = Backdrop.card(full, Backdrop.TALL_W, Backdrop.TALL_H);
+        // A poster is 2:3 and the narrow card a little wider: the strip comes off the bottom (the credits' end), not
+        // half off the top, where the title often is.
+        Bitmap card = Backdrop.card(full, Backdrop.TALL_W, Backdrop.TALL_H, 0);
         if (card != full && !full.isRecycled()) full.recycle();   // the decoded 500 × 750 poster is 1.5 MB
         return new Poster(card);
     }
@@ -1085,9 +1452,9 @@ final class Recs {
             if (parts[i].lastModified() < stale) parts[i].delete();
         }
         File[] files = dir.listFiles((d, name) -> !name.endsWith(".part"));
-        if (files == null || files.length <= 60) return;
+        if (files == null || files.length <= FILES) return;
         Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
-        for (int i = 0; i < files.length - 60; i++) {
+        for (int i = 0; i < files.length - FILES; i++) {
             //noinspection ResultOfMethodCallIgnored
             files[i].delete();
         }
@@ -1102,9 +1469,11 @@ final class Recs {
                 a.put(new JSONObject().put("id", p.id).put("kind", p.kind).put("title", p.title).put("backdrop", p.backdrop)
                         .put("poster", p.poster == null ? "" : p.poster).put("link", p.link == null ? "" : p.link)
                         .put("meta", p.meta).put("app", p.app == null ? "" : p.app).put("pkg", p.pkg == null ? "" : p.pkg)
-                        .put("detailed", p.detailed));
+                        .put("servicePkg", p.servicePkg == null ? "" : p.servicePkg)
+                        .put("tag", p.tag == null ? "" : p.tag).put("mine", p.mine).put("detailed", p.detailed));
             }
             SharedPreferences.Editor e = cache.edit().putString("picks", a.toString()).putInt("period", period).putLong("listAt", listAt)
+                    .putString("traktActivity", traktActivity).putLong("traktStamp", traktStamp)
                     .putString("language", listLanguage)
                     .putLong("keyStamp", keyStamp).putInt("version", CACHE_VERSION);
             // Watchmode links of titles no longer in the list go (the refused-key mark stays).
@@ -1131,6 +1500,9 @@ final class Recs {
             p.meta = o.optString("meta");
             p.app = o.optString("app").isEmpty() ? null : o.optString("app");
             p.pkg = o.optString("pkg").isEmpty() ? null : o.optString("pkg");
+            p.servicePkg = o.optString("servicePkg").isEmpty() ? null : o.optString("servicePkg");
+            p.tag = o.optString("tag").isEmpty() ? null : o.optString("tag");
+            p.mine = o.optInt("mine");
             p.detailed = o.optBoolean("detailed");
             out.add(p);
         }
