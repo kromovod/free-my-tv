@@ -257,6 +257,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private int shelfIndex;
     /** The first app the shelf shows: with more apps than fit, it scrolls with the focus. */
     private int shelfFirst;
+    private int recentVersion;   // Recent.version when the shelf was last put in "Last opened first" order
     private final int shelfVisible;
 
     // Moving shelf apps or top buttons: hold OK, then ← → move it, OK drops it, Back cancels. The
@@ -341,7 +342,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final RectF hitBox = new RectF();   // the mouse's hit tests (menu rows, Continue Watching cards)
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
-    private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp, dayLow;
+    private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, rainPaint, bigTemp, hourPaint, hourTemp, dayLow;
     private Paint sheetTitle, cardBig, cardUnit, cardValue, chartLine;
     private final Paint chartArea = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path chartPath = new Path(), chartFillPath = new Path(), arrowPath = new Path();
@@ -376,10 +377,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private float veilAmount = -1;
     private int veilColor;
     private HomeData.Weather textWeather;
+    private long textRainMinute = -1;
     private int textPrefs = -1;
     private boolean clock24;
     private String textLanguage;
-    private String weatherTitle, nowTemp, highLow, sunriseText, sunsetText;
+    private String weatherTitle, nowTemp, highLow, rainText, sunriseText, sunsetText;
     private final String[] hourText = new String[6], hourTempText = new String[6];
     private final String[] dayText = new String[5], dayMaxText = new String[5], dayMinText = new String[5];
     private boolean textDays;   // the weather card shows the next days (Home Settings → Forecast) and has them
@@ -718,6 +720,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         playing.start();
         checkNotices();
         hiddenNow.retainAll(Prefs.watchHidden());   // Home Settings may have shown the hidden ones again
+        if (Prefs.shelfRecent()) reorderRecent();
         if (!again) reload();
         updatePalette();
         updatePicks();
@@ -726,6 +729,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             allAppsOnResume = false;
             reset(false);
             openSheet();
+        } else if (inputsOnResume) {
+            inputsOnResume = false;
+            reset(false);
+            openInputs();
         } else if (sheetOpen) {
             closeSheet();
         }
@@ -960,6 +967,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         cardTitle = Ui.text(Ui.semibold, 25 * k, 0xB3FFFFFF);
         cardText = Ui.text(Ui.medium, 29 * k, 0xF2FFFFFF);
         cardDim = Ui.numbers(Ui.medium, 23 * k, 0xADFFFFFF);
+        rainPaint = Ui.numbers(Ui.medium, 23 * k, 0xFFFFFFFF);
+        rainPaint.setTextAlign(Paint.Align.RIGHT);
         cardDimRight = Ui.text(Ui.medium, 21 * k, 0x99FFFFFF);
         cardDimRight.setTextAlign(Paint.Align.RIGHT);
         bigTemp = Ui.numbers(Ui.light, 100 * k, 0xFFFFFFFF);
@@ -1624,6 +1633,24 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     // MARK: - Quotes and shelf
 
+    /** "Last opened first": the app just left comes first, focused, before the screen shows (no file or package reads). */
+    private void reorderRecent() {
+        int v = Recent.version;
+        if (v == recentVersion || reordering || pendingOrderSaves > 0) return;   // a move being saved goes first
+        recentVersion = v;
+        showRecent(Recent.orderKnown(shelf));
+    }
+
+    /** The shelf in this order, focused on its first app (nothing changes when it's already so). */
+    private void showRecent(List<HomeApps.Item> ordered) {
+        boolean same = true;
+        for (int i = 0; same && i < ordered.size(); i++) same = ordered.get(i) == shelf.get(i);
+        if (same) return;
+        shelfIndex = 0;
+        shelfFirst = 0;
+        setShelf(ordered);
+    }
+
     private void setShelf(List<HomeApps.Item> list) {
         wake();
         cancelReorder(true);    // the list changed under the move (an app installed or removed)
@@ -1768,7 +1795,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /**
      * The performance pill, at the right end of the tab bar (or of the clock's row when there are no picks): the frame
      * rate the screen is drawing at, the TV's CPU load and the memory the home screen uses, in a small glass capsule.
-     * It replaces the crypto prices, and unlike them it needs no network: the numbers are read from the TV itself.
+     * It needs no network: the numbers are read from the TV itself.
      */
     private void drawStats(Canvas c) {
         boolean clock = clockMode();
@@ -2053,7 +2080,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // MARK: - Bottom drawer
 
     private static List<HomeApps.Item> drawerList(Context c) {
-        List<HomeApps.Item> list = HomeApps.allInputs(c);
+        List<HomeApps.Item> list = HomeApps.orderedInputs(c);
         list.addAll(HomeApps.drawerShortcuts(c));
         list.addAll(HomeAssistant.items(c));   // empty unless configured and on in Home Settings
         return list;
@@ -2276,6 +2303,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             c.drawText(Ui.tr("No weather data right now."), x, r.top + 120 * k, cardDim);
             return;
         }
+        if (!rainText.isEmpty()) {
+            rainPaint.setColor(tone(L_FAINT, 0x99FFFFFF));   // the card's quiet tone, as the prices' note beside it
+            c.drawText(rainText, r.right - 34 * k, r.top + 54 * k, rainPaint);
+        }
         String symbol = Symbols.weather(wx.code, wx.isDay);
         float sw = Symbols.width(getContext(), symbol, 52 * k);
         Symbols.draw(getContext(), c, symbol, x + sw / 2, r.top + 132 * k, 52 * k, drawerInk(0.95f));
@@ -2320,6 +2351,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         textLanguage = Ui.language;
         if (wx != textWeather || settings) {
             textWeather = wx;
+            textRainMinute = -1;   // new weather or a new language: the rain text is built again, not a minute later
             weatherTitle = Prefs.city().isEmpty() ? Ui.tr("Weather") : Prefs.city();
             nowTemp = HomeData.degrees(wx.temp);
             highLow = HomeData.highLow(wx, "   ");
@@ -2335,6 +2367,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             }
             sunriseText = Ui.trf("Sunrise {time}", "time", Ui.time(wx.sunrise));
             sunsetText = Ui.trf("Sunset {time}", "time", Ui.time(wx.sunset));
+        }
+        // From the hours already fetched: the first rain in them, and the count down to it ("Rain in 1 h"). Once a
+        // minute: the count moves, and the text must not be built again on every frame.
+        long minute = System.currentTimeMillis() / 60_000;
+        if (minute != textRainMinute) {
+            textRainMinute = minute;
+            int rain = HomeData.rainInHours(wx, System.currentTimeMillis());
+            rainText = rain < 0 ? "" : rain == 0 ? Ui.tr("Rain now") : Ui.trf("Rain in {hours} h", "hours", rain);
         }
     }
 
@@ -2612,10 +2652,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         gridDirty = true;
     }
 
-    /** All Apps from the remote's button. Coming back from another app, resume() opens it (it closes the sheet). */
+    /** All Apps from the remote's button: opens the sheet, or closes it when it is already open. */
     void showAllApps() {
-        if (!running) {
+        if (!running) {   // pressed inside another app: All Apps on the way back, not the home screen
             allAppsOnResume = true;
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - allAppsAt < 400) return;   // one press can arrive twice (the Apps key and ACTION_ALL_APPS)
+        allAppsAt = now;
+        if (sheetOpen) {
+            closeSheet();
             return;
         }
         reset(false);
@@ -2623,6 +2670,30 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private boolean allAppsOnResume;
+    private long allAppsAt;
+
+    /** The remote's Input key (RemoteKeys, through HomeActivity): the drawer on the first input, as the top button. */
+    void showInputs() {
+        if (!running) {
+            inputsOnResume = true;
+            return;
+        }
+        reset(false);
+        openInputs();
+    }
+
+    private boolean inputsOnResume;
+
+    private void openInputs() {
+        openDrawer();
+        for (int i = 0; i < drawerItems.size(); i++) {
+            if (drawerItems.get(i).kind == HomeApps.INPUT) {
+                drawerIndex = i;
+                break;
+            }
+        }
+        retarget(false);
+    }
 
     private void openSheet() {
         sheetOpen = true;
@@ -2828,8 +2899,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             appsGeneration = Ui.generation;
             appsAt = up;
         }
+        // Without a full reload, "Last opened first" still reads the list again: an app opened from the screensaver in
+        // another process (Android 11 to 12L) changed only the file.
+        final List<HomeApps.Item> from = !apps && Prefs.shelfRecent() ? shelf : null;
         LOADER.execute(() -> {
             final List<HomeApps.Item> s = apps ? HomeApps.shelf(c, true) : null;
+            final List<HomeApps.Item> recent = from != null ? Recent.order(c, from) : null;
             final List<HomeApps.Item> st = statusList(c);
             final List<HomeApps.Item> d = drawerList(c);
             final List<HomeApps.Item> o = apps ? HomeApps.others(c) : null;
@@ -2844,6 +2919,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (top != null && !keepOrder) setLightButtons(top);
                 setTopContent(mode, w, allowed);
                 if (s != null && !keepOrder) setShelf(s);
+                else if (s == null && recent != null && shelf == from && !keepOrder) showRecent(recent);
                 if (apps && keepOrder) appsStale = true;
                 setStatusItems(st);
                 setDrawerItems(d);
@@ -3475,14 +3551,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             return;
         }
         if (it.kind == HomeApps.INPUTS) {
-            openDrawer();
-            for (int i = 0; i < drawerItems.size(); i++) {
-                if (drawerItems.get(i).kind == HomeApps.INPUT) {
-                    drawerIndex = i;
-                    break;
-                }
-            }
-            retarget(false);
+            openInputs();
             return;
         }
         boolean opened = HomeApps.open(activity, it, this, Math.round(r.left), Math.round(r.top),
@@ -3567,7 +3636,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private boolean canReorder() {
         if (sheetOpen || menuOpen) return false;
         if (zone == Z_TOP) return topIndex >= 3 && topIndex < 3 + lightButtons.size() && lightButtons.size() > 1;
-        if (zone != Z_SHELF || shelfIndex >= shelf.size() || shelf.size() < 2) return false;
+        // "Last opened first" places the shelf's apps itself
+        if (zone != Z_SHELF || shelfIndex >= shelf.size() || shelf.size() < 2 || Prefs.shelfRecent()) return false;
         HomeApps.Item it = shelf.get(shelfIndex);
         return it.kind == HomeApps.APP && it.pkg != null;
     }
@@ -4432,6 +4502,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (link != null && link.resolveActivity(activity.getPackageManager()) != null) {
             try {
                 activity.startActivity(link.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                Recent.note(activity, it.pkg);   // the shelf's "Last opened first" counts it too
                 return;
             } catch (ActivityNotFoundException | SecurityException e) {
                 AppLog.w("continue watching link: " + e.getMessage());
@@ -4473,6 +4544,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (launch == null) return false;
         try {
             activity.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Recent.note(activity, it.pkg);
             return true;
         } catch (ActivityNotFoundException | SecurityException e) {
             AppLog.w("couldn't open " + it.pkg + ": " + e.getMessage());

@@ -24,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -41,12 +42,13 @@ final class Ui {
     private Ui() {}
 
     /**
-     * Android 8 to 11, and Android 12 and 12L short on memory: their GPUs need the cheaper drawing paths (Shadows,
-     * rounded images) and can't afford the off-screen layers (a 2 GB TCL on Android 12 spent 156 MB of GPU memory on
-     * them, without the AGSL shaders that only arrive on 13). From 13 the layers also cache the shaders' glass, so
-     * they stay until a small-memory TV there is measured.
+     * Android 8 to 11, and any Android short on memory: their GPUs need the cheaper drawing paths (rounded images,
+     * the drawer cards kept as bitmaps) and can't afford the off-screen layers (a 2 GB TCL on Android 12 spent 156 MB
+     * of GPU memory on them). The shadows' cached masks are for every TV (Shadows).
+     * Measured on a 1.9 GB Google TV on Android 14 (Mali-G52, 1080p UI on a 4K panel): with these paths the 90th
+     * percentile frame went from 40 to 32 ms, as fast as the TV's own Settings app, and the look is the same.
      */
-    static final boolean LEGACY = Build.VERSION.SDK_INT < 31 || (Build.VERSION.SDK_INT < 33 && smallMemory());
+    static final boolean LEGACY = Build.VERSION.SDK_INT < 31 || smallMemory();
 
     /** Under 3 GB of RAM, read from /proc: LEGACY is read before Ui.init, so there is no Context yet. */
     private static boolean smallMemory() {
@@ -128,6 +130,12 @@ final class Ui {
         {"da", "DK"}, {"nb", "NO"}, {"fi", "FI"}, {"cs", "CZ"}, {"sk", "SK"}, {"ro", "RO"}, {"tr", "TR"}, {"ru", "RU"}, {"uk", "UA"},
         {"el", "GR"}, {"ja", "JP"}, {"ko", "KR"}, {"hi", "IN"}, {"id", "ID"}, {"vi", "VN"}, {"th", "TH"},
     };
+    /**
+     * Languages written right to left. The LG and Samsung app mirrors its screen for them (web/strings.js); HomeView
+     * and the settings aren't mirrored yet, so here their catalogues (Arabic's, shared with the web app) aren't
+     * offered: not in the settings' list, and "auto" on a TV in one of them stays in English, as before.
+     */
+    private static final List<String> RTL = Arrays.asList("ar", "he", "fa", "ur");
 
     /** The text for this English key in the current language (the English itself when there is none). */
     static String tr(String english) {
@@ -199,7 +207,7 @@ final class Ui {
         return locale;
     }
 
-    /** "en" and every language with a catalogue, sorted by code. */
+    /** "en" and every language with a catalogue that this app can lay out (not the right-to-left ones), sorted by code. */
     static String[] languages() {
         String[] l = languages;
         if (l != null) return l;
@@ -209,7 +217,10 @@ final class Ui {
         try {
             String[] files = c == null ? null : c.getAssets().list("i18n");
             for (String f : files == null ? new String[0] : files) {
-                if (f.endsWith(".json") && !f.equals("en.json")) found.add(f.substring(0, f.length() - 5));
+                if (!f.endsWith(".json") || f.equals("en.json")) continue;
+                String code = f.substring(0, f.length() - 5);
+                int dash = code.indexOf('-');
+                if (!RTL.contains(base(dash < 0 ? code : code.substring(0, dash)))) found.add(code);
             }
         } catch (IOException e) {
             AppLog.w("i18n: " + e.getMessage());

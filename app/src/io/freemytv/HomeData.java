@@ -54,6 +54,21 @@ final class HomeData {
         weatherFailedAt = 0;
     }
 
+
+    /** 0 = raining now, > 0 = hours until the next rain, -1 = none in the next hours. */
+    static int rainInHours(Weather w, long now) {
+        if (isRain(w.code)) return 0;
+        for (int i = 0; i < w.hourCode.size() && i < w.hours.size(); i++) {
+            if (!isRain(w.hourCode.get(i))) continue;
+            return Math.max(1, Math.round((w.hours.get(i) - now) / 3_600_000f));
+        }
+        return -1;
+    }
+
+    /** WMO drizzle, rain, showers and thunderstorms (snow is not rain). */
+    private static boolean isRain(int code) {
+        return (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95;
+    }
     static final class Weather {
         double temp = Double.NaN, max = Double.NaN, min = Double.NaN;
         int code = -1;

@@ -15,7 +15,7 @@ import translate  # noqa: E402  (the catalogues and the keys the web app uses)
 
 GENERIC = {'tmdbKey': '', 'tmdbRegion': '', 'latitude': '', 'longitude': '', 'city': '', 'language': 'auto',
            'temperature': 'auto', 'theme': 'auto', 'hideAnimation': False, 'hideApps': [],
-           'shelfApps': [], 'drawerFirst': False, 'openPicksIn': 'apps'}
+           'shelfApps': [], 'drawerFirst': False, 'openPicksIn': 'apps', 'clockFormat': 'auto'}
 
 
 def config_from_args(args):
@@ -62,9 +62,18 @@ def read_config(path):
         'theme': values.get('theme', 'auto') or 'auto',
         'hideAnimation': values.get('hide_animation', 'false').lower() == 'true',
         'hideApps': [s.strip() for s in values.get('hide_apps', '').split(',') if s.strip()],
+        # Where Home Settings' Picks from switches start, as on Android (Prefs.offServices): netflix, prime, disney...
+        'hideServices': [s.strip().lower() for s in values.get('hide_services', '').split(',') if s.strip()],
+        # Samsung: a pick opens its title's page in its app (Watchmode's free plan: 2,500 requests a month).
+        'watchmodeKey': values.get('watchmode_key', '').strip(),
         'shelfApps': [s.strip() for s in values.get('shelf_apps', '').split(',') if s.strip()],
         'drawerFirst': values.get('drawer_first', 'false').lower() == 'true',
+        # Samsung: Home pressed in an app opened from here brings Free My TV back. It changes the package's manifest
+        # (tizen/build.py), so only a build that asks for it carries it; the release doesn't.
+        'homeButton': values.get('samsung_home_button', 'false').lower() == 'true',
         'openPicksIn': 'nuvio' if values.get('open_picks_in', '').strip().lower() == 'nuvio' else 'apps',
+        # 24 or 12 forces the clock; auto follows the language's catalogue.
+        'clockFormat': values.get('clock_format', '').strip() if values.get('clock_format', '').strip() in ('24', '12') else 'auto',
     }
 
 
@@ -99,6 +108,13 @@ def files(config, made_by):
     for name in ('InterVariable.ttf', 'OFL.txt'):
         with open(os.path.join(ROOT, 'app', 'assets', 'fonts', name), 'rb') as f:
             out['fonts/' + name] = f.read()
+    # Inter in fixed weights for Chromium before 62 (home.css's @font-face); the variable font above stays for WOFF2-less
+    # Tizen 2.4. Same family, same OFL licence.
+    fonts = os.path.join(web, 'fonts')
+    for name in sorted(os.listdir(fonts)):
+        if name.endswith('.woff2'):
+            with open(os.path.join(fonts, name), 'rb') as f:
+                out['fonts/' + name] = f.read()
     return out
 
 

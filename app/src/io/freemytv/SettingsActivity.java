@@ -154,9 +154,9 @@ public class SettingsActivity extends Activity {
         private static final float LIST_ROW_H = 68, LIST_ROW_GAP = 6;
         private static final int PICK_VISIBLE = 9;
         private static final float LIST_X = 1000, LIST_R = 1824, LIST_TOP = 186, ROW_GAP = 8, CHOICE_H = 104;
-        // The main menu: eight rows, then the comparison, the picks (with the Watchmode credit) and two notices, all on
+        // The main menu: nine rows, then the comparison, the picks (with the Watchmode credit) and two notices, all on
         // one 1080 px screen: the rows share the 462 px that seven took.
-        private static final float MAIN_TOP = 140, ROW_H = 53.75f, MAIN_GAP = 4;
+        private static final float MAIN_TOP = 140, ROW_H = 47.33f, MAIN_GAP = 4;
         private static final int AMBER = 0xFFFFC266, INK = 0xFF1C1C1E;
 
         private final SettingsActivity activity;
@@ -173,6 +173,9 @@ public class SettingsActivity extends Activity {
         private final List<String[]> services = new ArrayList<>();   // {key, name} of the streaming services on the TV (Picks from)
         private final List<String> shelfOrder = new ArrayList<>();
         private boolean editingTop;
+        private boolean editingInputs;   // the editor edits the drawer's inputs instead of the shelf or top buttons
+        /** The shelf editor's first row: the order set here or the last one opened first (Prefs.shelfRecent). */
+        private static final String ORDER_ROW = "#order";
         private int pickFor, pickCurrent, pickScroll;   // pickFor: the remote button (index + 1)
         private float touchX, touchY;
         private static final int PICK_CITY = 0, PICK_LANGUAGE = -1, PICK_SLEEP = -2, PICK_PLACE = -3, PICK_PHOTOS = -4,
@@ -211,6 +214,8 @@ public class SettingsActivity extends Activity {
         private Toast whyToast;   // why the focused option is unavailable
         private String[] whyRows;  // each row's reason, worked out once per screen (null: again on the next frame)
         private int whyScreen = -1, whyScroll = -1;
+        private String liveButtonText;   // Home Settings > Live TV button's value (liveButtonValue)
+        private int liveButtonAt;
         private int sleepLeft;     // the sleep timer's minutes left, read with the state, not on every frame
         private int whyState = -1;
         private String errorShown;
@@ -327,8 +332,8 @@ public class SettingsActivity extends Activity {
                         return Ui.trf("Home Screen, {mode}", "mode", value);
                     }
                     String[] names = {Ui.tr("Screensaver, preview"), Ui.tr("Home Settings"),
-                            Ui.tr("Shelf"), Ui.tr("Top Buttons"), Ui.tr("Remote Buttons"), Ui.tr("Sleep Timer"),
-                            Ui.tr("TV Settings")};
+                            Ui.tr("Shelf"), Ui.tr("Top Buttons"), Ui.tr("Inputs"), Ui.tr("Remote Buttons"),
+                            Ui.tr("Sleep Timer"), Ui.tr("TV Settings")};
                     return row - 1 < names.length ? names[row - 1] : "";
                 }
                 case HOME_CHOICE: {
@@ -371,10 +376,15 @@ public class SettingsActivity extends Activity {
                     int at = pickScroll + row;
                     if (at >= shelfRows.size()) return "";
                     String[] app = shelfRows.get(at);
+                    if (app[0].equals(ORDER_ROW)) return app[1] + ", " + shelfOrderValue();
                     int place = shelfOrder.indexOf(app[0]);
                     if (editingTop) {
                         return app[1] + ", " + (place >= 0 ? Ui.trf("in the top buttons, place {n}", "n", place + 1)
                                 : Ui.tr("not in the top buttons"));
+                    }
+                    if (editingInputs) {
+                        return app[1] + ", " + (place >= 0 ? Ui.trf("in the inputs, place {n}", "n", place + 1)
+                                : Ui.tr("not in the inputs"));
                     }
                     return app[1] + ", " + (place >= 0 ? Ui.trf("on the shelf, place {n}", "n", place + 1)
                             : Ui.tr("not on the shelf"));
@@ -408,6 +418,7 @@ public class SettingsActivity extends Activity {
             if (running) return;
             running = true;
             whyRows = null;
+            liveButtonText = null;   // the device on the port may have another name by now
             startedAt = SystemClock.uptimeMillis();
             lastNanos = 0;
             handler.post(poll);
@@ -530,7 +541,7 @@ public class SettingsActivity extends Activity {
 
         private int rowCount() {
             switch (screen) {
-                case MAIN: return 8;
+                case MAIN: return 9;
                 case HOME_CHOICE: return 2;
                 case HOME_SETTINGS: return Math.min(SETTINGS_VISIBLE, settingLabels().length);
                 case PICKER: return Math.min(PICK_VISIBLE, pickLabels.size());
@@ -587,9 +598,9 @@ public class SettingsActivity extends Activity {
             String busyText = busyText();
             String mode = freeActive() ? "Free My TV" : Ui.tr("Original");
             String[] labels = {Ui.tr("Home Screen"), Ui.tr("Screensaver"),
-                    Ui.tr("Home Settings"), Ui.tr("Shelf"), Ui.tr("Top Buttons"),
+                    Ui.tr("Home Settings"), Ui.tr("Shelf"), Ui.tr("Top Buttons"), Ui.tr("Inputs"),
                     Ui.tr("Remote Buttons"), Ui.tr("Sleep Timer"), Ui.tr("TV Settings")};
-            String[] values = {working ? "" : mode, Ui.tr("Preview"), "", "", "", "", "", ""};
+            String[] values = {working ? "" : mode, Ui.tr("Preview"), "", "", "", "", "", "", ""};
             for (int i = 0; i < labels.length; i++) {
                 float y = (MAIN_TOP + i * (ROW_H + MAIN_GAP)) * k;
                 rowRect.set(LIST_X * k, y, LIST_R * k, y + ROW_H * k);
@@ -897,6 +908,7 @@ public class SettingsActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
                     if (down && screen == SHELF_EDIT) {
                         moveShelfApp(e.getKeyCode() == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1);
+                        spoken.focusMoved();   // TalkBack reads the new value or place
                     } else if (down && (screen == HOME_SETTINGS || screen == REMOTE_KEYS || screen == POWER || screen == PICKS || screen == PICK_FROM)) {
                         adjust(e.getKeyCode() == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1);
                     }
@@ -952,8 +964,9 @@ public class SettingsActivity extends Activity {
                                 pickScroll = 0;
                                 screen = HOME_SETTINGS;
                             } else {
-                                focus = screen == HOME_SETTINGS ? 2 : screen == SHELF_EDIT ? (editingTop ? 4 : 3)
-                                        : screen == REMOTE_KEYS ? 5 : screen == POWER ? 6 : 0;
+                                focus = screen == HOME_SETTINGS ? 2 : screen == SHELF_EDIT
+                                        ? (editingTop ? 4 : editingInputs ? 5 : 3)
+                                        : screen == REMOTE_KEYS ? 6 : screen == POWER ? 7 : 0;
                                 screen = MAIN;
                             }
                         }
@@ -972,13 +985,14 @@ public class SettingsActivity extends Activity {
         private static final String[] UNITS = {"auto", "C", "F"}, THEMES = {"auto", "light", "dark"},
                 CLOCKS = {"auto", "24", "12"};
         /** Home Settings: language, temperature, theme, clock, my photos, sounds, top of the screen, picks, Continue
-         *  Watching's apps, watch from the screensaver, Android apps, status icons, Recent Apps, weather, city, forecast,
-         *  now playing, Home Assistant (only on builds with its address), the performance card, then the TMDB and
-         *  Watchmode keys and updates (the last row). */
+        /** Home Settings: language, temperature, theme, clock, my photos, sounds, top of the screen, picks, Continue
+         *  Watching's apps, watch from the screensaver, Android apps, status icons, Recent Apps, at power-on, Live TV
+         *  button, weather, city, forecast, now playing, Home Assistant (only on builds with its address), the
+         *  performance card, then the TMDB and Watchmode keys and updates (the last row). */
         private static final int CLOCK_ROW = 3, PHOTOS_ROW = 4, TOP_ROW = 6, PICKS_ROW = 7, WATCH_ROW = 8,
                 SAVER_ROW = 9, ANDROID_APPS_ROW = 10, STATUS_ICONS_ROW = 11, RECENTS_ROW = 12, POWER_ON_ROW = 13,
-                WEATHER_ROW = 14, CITY_ROW = 15, FORECAST_ROW = 16, PLAYING_ROW = 17, HOME_ROW = Config.HOME_ASSISTANT ? 18 : -1,
-                STATS_ROW = Config.HOME_ASSISTANT ? 19 : 18;
+                LIVE_BUTTON_ROW = 14, WEATHER_ROW = 15, CITY_ROW = 16, FORECAST_ROW = 17, PLAYING_ROW = 18,
+                HOME_ROW = Config.HOME_ASSISTANT ? 19 : -1, STATS_ROW = Config.HOME_ASSISTANT ? 20 : 19;
         /** No "home" on Xiaomi TVs: their remote sends one Home press as a burst of presses (HomeView.BURST_MS). */
         private static final String[] RECENTS = RemoteKeys.XIAOMI ? new String[] {"off", "drawer"}
                 : new String[] {"off", "drawer", "home"};
@@ -1001,6 +1015,7 @@ public class SettingsActivity extends Activity {
             l.add(Ui.tr("Status icons"));   // before the weather widget: City and Forecast are the widget's
             l.add(Ui.tr("Recent Apps"));
             l.add(Ui.tr("At power-on"));
+            l.add(Ui.tr("Live TV button"));
             l.add(Ui.tr("Weather widget"));
             l.add(Ui.tr("City"));
             l.add(Ui.tr("Forecast"));
@@ -1104,6 +1119,7 @@ public class SettingsActivity extends Activity {
             v[RECENTS_ROW] = rec.equals("home") ? Ui.tr("recents|Drawer and Home twice") : rec.equals("drawer") ? Ui.tr("recents|In the drawer") : Ui.tr("Off");
             String power = Prefs.powerOn();
             v[POWER_ON_ROW] = power.equals("home") ? Ui.tr("power|Home screen") : power.equals("live") ? Ui.tr("Live TV") : Ui.tr("TV's choice");
+            v[LIVE_BUTTON_ROW] = liveButtonValue();
             v[ANDROID_APPS_ROW] = onOff(Prefs.androidApps());
             v[STATUS_ICONS_ROW] = onOff(Prefs.statusIcons());
             v[WEATHER_ROW] = onOff(Prefs.weather());
@@ -1116,6 +1132,20 @@ public class SettingsActivity extends Activity {
             v[v.length - 2] = keyValue(Recs.watchmodeKey());
             v[v.length - 1] = updatesValue();
             return v;
+        }
+
+        /**
+         * The Live TV button's row: Live TV, or the input it opens under its name. Naming it asks the TV for its inputs,
+         * and the list is drawn at every frame while the focus moves: read again only when a setting changed or the
+         * screen came back.
+         */
+        private String liveButtonValue() {
+            if (liveButtonText == null || liveButtonAt != Prefs.version) {
+                HomeApps.Item box = HomeApps.liveButtonInput(getContext());
+                liveButtonText = box != null ? box.label : Ui.tr("Live TV");
+                liveButtonAt = Prefs.version;
+            }
+            return liveButtonText;
         }
 
         /** "auto", then English and every language with a catalogue. */
@@ -1135,12 +1165,14 @@ public class SettingsActivity extends Activity {
             switch (screen) {
                 case MAIN:
                     return i == 0 ? Capabilities.NEED_SWITCH : i == 1 ? Capabilities.NEED_SCREENSAVER
-                            : i == 5 ? Capabilities.NEED_REMOTE_BUTTONS
-                            : i == 6 ? Capabilities.NEED_ADB : null;
+                            : i == 5 ? Capabilities.NEED_INPUTS
+                            : i == 6 ? Capabilities.NEED_REMOTE_BUTTONS
+                            : i == 7 ? Capabilities.NEED_ADB : null;
                 case HOME_SETTINGS:
                     return pickScroll + i == PLAYING_ROW ? Capabilities.NEED_LISTENER
                             : pickScroll + i == HOME_ROW ? Capabilities.NEED_HOME_ASSISTANT
                             : pickScroll + i == POWER_ON_ROW ? Capabilities.NEED_LIVE_TV
+                            : pickScroll + i == LIVE_BUTTON_ROW ? Capabilities.NEED_HDMI
                             : pickScroll + i == SAVER_ROW ? Capabilities.NEED_SCREENSAVER : null;
                 case POWER: {
                     int id = powerRows()[i];
@@ -1148,7 +1180,7 @@ public class SettingsActivity extends Activity {
                 }
                 case SHELF_EDIT: {   // only to add it: one already among the buttons can still move or go
                     String key = shelfRows.get(pickScroll + i)[0];
-                    if (!editingTop || shelfOrder.contains(key)) return null;
+                    if (editingInputs || !editingTop || shelfOrder.contains(key)) return null;
                     return HomeApps.TOP_LIVE.equals(key) ? Capabilities.NEED_LIVE_TV
                             : HomeApps.TOP_STORE.equals(key) ? Capabilities.NEED_APP_STORE : null;
                 }
@@ -1296,8 +1328,11 @@ public class SettingsActivity extends Activity {
         }
 
         private String[] keyLabels() {
+            if (RemoteKeys.CHROMECAST_SABRINA) return new String[] {Ui.tr("YouTube button")};
             if (RemoteKeys.GOOGLE_STREAMER) return new String[] {Ui.tr("YouTube button"), Ui.tr("Netflix button"),
                     Ui.tr("Custom button") + " \u2605"};
+            if (RemoteKeys.ONN) return new String[] {Ui.tr("YouTube button"), Ui.tr("Netflix button"),
+                    Ui.tr("Disney+ button"), Ui.tr("Paramount+ button"), Ui.tr("Free TV button")};
             if (RemoteKeys.JVC_SKYWORTH) return new String[] {Ui.tr("Inputs"), Ui.tr("Settings button")};
             if (RemoteKeys.PHILIPS_GTV) return new String[] {Ui.tr("Settings button"), Ui.tr("All Apps button"), Ui.tr("TV Guide button"),
                     Ui.tr("Netflix button"), Ui.tr("YouTube button"), Ui.tr("Prime Video button")};
@@ -1314,7 +1349,8 @@ public class SettingsActivity extends Activity {
             if (RemoteKeys.SONY) return new String[] {Ui.tr("BRAVIA CORE button"),
                     Ui.tr("Netflix button"), Ui.tr("Disney+ button"),
                     Ui.tr("Prime Video button"), Ui.tr("YouTube button"),
-                    Ui.tr("Crunchyroll button"), Ui.tr("Google Play button"), Ui.tr("SonyLIV button")};
+                    Ui.tr("Crunchyroll button"), Ui.tr("Google Play button"), Ui.tr("SonyLIV button"),
+                    Ui.tr("Settings button")};
             return new String[] {Ui.tr("Netflix button"), Ui.tr("YouTube button"),
                     Ui.tr("Prime Video button"), Ui.tr("TCL Channel button"), Ui.tr("Settings button")};
         }
@@ -1339,7 +1375,7 @@ public class SettingsActivity extends Activity {
             appLabels.clear();
             appPkgs.add("");
             // An empty choice leaves the key to the system's receiver.
-            appLabels.add(RemoteKeys.GOOGLE_STREAMER ? Ui.tr("Google default")
+            appLabels.add(RemoteKeys.GOOGLE_STREAMER ? Ui.tr("Google default") : RemoteKeys.ONN ? Ui.tr("onn default")
                     : RemoteKeys.SONY ? Ui.tr("Sony default") : RemoteKeys.XIAOMI || RemoteKeys.XIAOMI_AFKR0
                     ? Ui.tr("Xiaomi default") : RemoteKeys.PHILIPS_GTV ? Ui.tr("Philips default") : Ui.tr("Nothing"));
             if (RemoteKeys.JVC_SKYWORTH) {
@@ -1348,9 +1384,11 @@ public class SettingsActivity extends Activity {
                 appPkgs.add(Prefs.QUICK_SETTINGS);
                 appLabels.add(Ui.tr("Quick Settings"));
             }
-            if (RemoteKeys.TCL || RemoteKeys.PHILIPS_GTV) {
-                appPkgs.add(Prefs.QUICK_PANEL);
-                appLabels.add(Ui.tr("Quick Settings"));
+            if (RemoteKeys.TCL || RemoteKeys.PHILIPS_GTV || RemoteKeys.SONY) {
+                if (!RemoteKeys.SONY) {
+                    appPkgs.add(Prefs.QUICK_PANEL);
+                    appLabels.add(Ui.tr("Quick Settings"));
+                }
                 // The Settings button's default, listed even where TV Settings has no launcher entry.
                 boolean listed = false;
                 for (String[] f : found) listed |= f[0].equals("com.android.tv.settings");
@@ -1359,12 +1397,13 @@ public class SettingsActivity extends Activity {
                     appLabels.add(Ui.tr("TV Settings"));
                 }
             }
-            // On Xiaomi's MiTV-AFKR0 the Mi TV+ button can open this home screen too, like the Mi button elsewhere.
-            if (RemoteKeys.XIAOMI || RemoteKeys.XIAOMI_AFKR0) {
+            // On Xiaomi's MiTV-AFKR0 the Mi TV+ button can open this home screen too, like the Mi button elsewhere; so
+            // can onn's buttons.
+            if (RemoteKeys.XIAOMI || RemoteKeys.XIAOMI_AFKR0 || RemoteKeys.ONN) {
                 appPkgs.add(HomeMode.PKG);
                 appLabels.add("Free My TV");
             }
-            if (RemoteKeys.HISENSE || RemoteKeys.GOOGLE_STREAMER || RemoteKeys.PHILIPS_GTV) {
+            if (RemoteKeys.HISENSE || RemoteKeys.GOOGLE_STREAMER || RemoteKeys.ONN || RemoteKeys.PHILIPS_GTV) {
                 appPkgs.add(Prefs.ALL_APPS);
                 appLabels.add(Ui.tr("All Apps"));
             }
@@ -1461,6 +1500,14 @@ public class SettingsActivity extends Activity {
                     int at = java.util.Arrays.asList(Prefs.POWER_ON).indexOf(Prefs.powerOn());
                     Prefs.setPowerOn(Prefs.POWER_ON[(at + dir + Prefs.POWER_ON.length) % Prefs.POWER_ON.length]);
                     return;
+                }
+                case LIVE_BUTTON_ROW: {   // Live TV, then every HDMI input the TV lists (the drawer's, dimmed ones too)
+                    List<String> ids = new ArrayList<>();
+                    ids.add("");
+                    for (HomeApps.Item it : HomeApps.allInputs(getContext())) if (it.inputId != null) ids.add(it.inputId);
+                    int at = Math.max(0, ids.indexOf(Prefs.liveButton()));
+                    Prefs.setLiveButton(ids.get((at + dir + ids.size()) % ids.size()));
+                    return;   // nothing the weather or the prices depend on
                 }
                 case ANDROID_APPS_ROW: Prefs.setAndroidApps(!Prefs.androidApps()); break;
                 case STATUS_ICONS_ROW: {
@@ -2084,6 +2131,7 @@ public class SettingsActivity extends Activity {
 
         private void openShelfEditor(boolean top) {
             editingTop = top;
+            editingInputs = false;
             shelfOrder.clear();
             if (top) {
                 shelfOrder.addAll(HomeApps.topButtonKeys());
@@ -2100,13 +2148,43 @@ public class SettingsActivity extends Activity {
             screen = SHELF_EDIT;
         }
 
-        /** Selected apps first, in shelf order, then the rest in the order they came. */
+        private void openInputsEditor() {
+            editingTop = false;
+            editingInputs = true;
+            shelfOrder.clear();
+            for (HomeApps.Item it : HomeApps.orderedInputs(getContext())) shelfOrder.add(it.key);
+            rebuildShelfRows(HomeApps.inputCandidates(getContext()));
+            pickScroll = 0;
+            focus = 0;
+            screen = SHELF_EDIT;
+        }
+
+        /** The order row (shelf only), then selected apps, in shelf order, then the rest in the order they came. */
         private void rebuildShelfRows(List<String[]> candidates) {
             shelfRows.clear();
+            if (!editingTop && !editingInputs) shelfRows.add(new String[] {ORDER_ROW, Ui.tr("Shelf order")});
             for (String pkg : shelfOrder) {
                 for (String[] cand : candidates) if (cand[0].equals(pkg)) { shelfRows.add(cand); break; }
             }
-            for (String[] cand : candidates) if (!shelfOrder.contains(cand[0])) shelfRows.add(cand);
+            for (String[] cand : candidates) {
+                if (!shelfOrder.contains(cand[0]) && !cand[0].equals(ORDER_ROW)) shelfRows.add(cand);
+            }
+        }
+
+        /** The shelf puts the last app opened first, so the places set here don't apply (and can't be changed). */
+        private boolean shelfOrderLocked() {
+            return !editingTop && !editingInputs && Prefs.shelfRecent();
+        }
+
+        /** "My order" deletes the list of apps opened: nothing is kept while the shelf doesn't use it. */
+        private void switchShelfOrder() {
+            boolean on = !Prefs.shelfRecent();
+            Prefs.setShelfRecent(on);
+            if (!on) Recent.clear(getContext());
+        }
+
+        private String shelfOrderValue() {
+            return Prefs.shelfRecent() ? Ui.tr("Last opened first") : Ui.tr("My order");
         }
 
         /** Same rows after a change: keeps the focus on the app that was focused. */
@@ -2121,21 +2199,46 @@ public class SettingsActivity extends Activity {
                 focus = i - pickScroll;
                 break;
             }
-            if (editingTop) Prefs.setTopButtons(shelfOrder); else Prefs.setShelf(shelfOrder);
+            if (editingTop) Prefs.setTopButtons(shelfOrder);
+            else if (editingInputs) saveInputsOrder();
+            else Prefs.setShelf(shelfOrder);
+        }
+
+        /** The order keeps the place of inputs the TV no longer lists; a hidden one stays hidden until it's shown. */
+        private void saveInputsOrder() {
+            List<String> saved = Prefs.inputsOrder();
+            Prefs.setInputsOrder(VisibleOrder.replace(saved == null ? shelfOrder : saved, shelfOrder));
+            List<String> hidden = new ArrayList<>(Prefs.inputsHidden());
+            hidden.removeAll(shelfOrder);
+            for (String[] row : shelfRows) {
+                if (!shelfOrder.contains(row[0]) && !hidden.contains(row[0])) hidden.add(row[0]);
+            }
+            Prefs.setInputsHidden(hidden);
         }
 
         /** OK: puts the app on the shelf (at the end) or takes it off. */
         private void toggleShelfApp() {
+            if (pickScroll + focus >= shelfRows.size()) return;   // an empty list has no row under OK
             String pkg = shelfRows.get(pickScroll + focus)[0];
+            if (pkg.equals(ORDER_ROW)) {
+                switchShelfOrder();
+                return;
+            }
             if (shelfOrder.contains(pkg)) shelfOrder.remove(pkg);
-            else if (editingTop || shelfOrder.size() < HomeApps.maxShelf(getContext())) shelfOrder.add(pkg);
+            else if (editingTop || editingInputs || shelfOrder.size() < HomeApps.maxShelf(getContext())) shelfOrder.add(pkg);
             else return;
             refreshShelfRows(pkg);
         }
 
         /** ← → : moves a shelf app one place earlier or later. */
         private void moveShelfApp(int dir) {
+            if (pickScroll + focus >= shelfRows.size()) return;
             String pkg = shelfRows.get(pickScroll + focus)[0];
+            if (pkg.equals(ORDER_ROW)) {   // two values: either arrow switches
+                switchShelfOrder();
+                return;
+            }
+            if (shelfOrderLocked()) return;
             int at = shelfOrder.indexOf(pkg), to = at + dir;
             if (at < 0 || to < 0 || to >= shelfOrder.size()) return;
             shelfOrder.remove(at);
@@ -2145,18 +2248,30 @@ public class SettingsActivity extends Activity {
 
         private void drawShelfEditor(Canvas c) {
             Paint heading = Ui.text(Ui.displaySemibold, 34 * k, 0xFFFFFFFF);
-            c.drawText(editingTop ? Ui.tr("Top Buttons") : Ui.tr("Shelf"), LIST_X * k + 30 * k, (LIST_TOP - 24) * k, heading);
+            c.drawText(editingTop ? Ui.tr("Top Buttons") : editingInputs ? Ui.tr("Inputs") : Ui.tr("Shelf"),
+                    LIST_X * k + 30 * k, (LIST_TOP - 24) * k, heading);
             int rows = rowCount();
+            boolean locked = shelfOrderLocked();
             for (int i = 0; i < rows; i++) {
                 String[] app = shelfRows.get(pickScroll + i);
                 int place = shelfOrder.indexOf(app[0]);
                 float y = (LIST_TOP + 20 + i * (LIST_ROW_H + LIST_ROW_GAP)) * k;
                 rowRect.set(LIST_X * k, y, LIST_R * k, y + LIST_ROW_H * k);
                 float f = drawRowBackground(c, i);
+                if (app[0].equals(ORDER_ROW)) {
+                    rowLabel.setColor(blend(0xF2FFFFFF, INK, f));
+                    rowValue.setColor(blend(0xB3FFFFFF, 0xB31C1C1E, f));
+                    float base = rowRect.centerY() + Ui.halfCap(rowLabel);
+                    c.drawText(app[1], rowRect.left + 30 * k, base, rowLabel);
+                    c.drawText(shelfOrderValue(), rowRect.right - 30 * k, base, rowValue);
+                    continue;
+                }
                 boolean off = unavailable(i) != null;
                 rowLabel.setColor(off ? blend(0x73FFFFFF, 0x731C1C1E, f)
                         : blend(place >= 0 ? 0xF2FFFFFF : 0x80FFFFFF, place >= 0 ? INK : 0x801C1C1E, f));
-                rowValue.setColor(off ? blend(0x59FFFFFF, 0x591C1C1E, f) : blend(0xB3FFFFFF, 0xB31C1C1E, f));
+                // The places are greyed while the shelf puts the last app opened first: they don't apply then.
+                rowValue.setColor(off ? blend(0x59FFFFFF, 0x591C1C1E, f)
+                        : locked && place >= 0 ? blend(0x4DFFFFFF, 0x4D1C1C1E, f) : blend(0xB3FFFFFF, 0xB31C1C1E, f));
                 float base = rowRect.centerY() + Ui.halfCap(rowLabel);
                 c.drawText(TextUtils.ellipsize(app[1], new TextPaint(rowLabel), 520 * k, TextUtils.TruncateAt.END).toString(), rowRect.left + 30 * k, base, rowLabel);
                 float right = rowRect.right - 30 * k;
@@ -2170,12 +2285,16 @@ public class SettingsActivity extends Activity {
             }
             Paint hint = Ui.text(Ui.regular, 23 * k, 0x8CFFFFFF);
             float hy = (LIST_TOP + 20 + rows * (LIST_ROW_H + LIST_ROW_GAP) + 36) * k;
-            if (!editingTop && HomeApps.lowRam(getContext())) {
+            if (!editingTop && !editingInputs && HomeApps.lowRam(getContext())) {
                 c.drawText(Ui.tr("This TV has little memory, so the shelf holds fewer apps."), LIST_X * k + 30 * k, hy + 38 * k, hint);
             }
+            int max = HomeApps.maxShelf(getContext());
             c.drawText(editingTop ? Ui.tr("OK adds or removes a button. ← → change the order.")
-                    : HomeApps.maxShelf(getContext()) == Integer.MAX_VALUE ? Ui.tr("OK adds or removes an app. ← → change the order.")
-                    : Ui.trf("OK adds or removes (up to {n}). ← → change the order.", "n", HomeApps.maxShelf(getContext())),
+                    : editingInputs ? Ui.tr("OK shows or hides an input. ← → change the order.")
+                    : locked && max == Integer.MAX_VALUE ? Ui.tr("OK adds or removes an app. The last one opened comes first.")
+                    : locked ? Ui.trf("OK adds or removes (up to {n}). The last one opened comes first.", "n", max)
+                    : max == Integer.MAX_VALUE ? Ui.tr("OK adds or removes an app. ← → change the order.")
+                    : Ui.trf("OK adds or removes (up to {n}). ← → change the order.", "n", max),
                     LIST_X * k + 30 * k, hy, hint);
         }
 
@@ -2338,6 +2457,7 @@ public class SettingsActivity extends Activity {
                         : RemoteKeys.XIAOMI ? Ui.tr("Xiaomi default: the button opens what it always did.")
                         : RemoteKeys.HISENSE ? Ui.tr("Netflix: the TV itself controls that button.")
                         : RemoteKeys.GOOGLE_STREAMER ? Ui.tr("The other buttons: the TV itself controls them.")
+                        : RemoteKeys.ONN ? Ui.tr("onn default: the button opens what it always did.")
                         : RemoteKeys.supported() ? Ui.tr("Disney and Globoplay: the TV itself controls those buttons.")
                         : Ui.tr("TCL remote buttons: on this TV they work as always."), LIST_X * k + 30 * k, hy + 38 * k, hint);
                 // No key service on this TV (RemoteKeys.FILTER_SAFE): inside other apps the buttons do nothing.
@@ -2383,6 +2503,7 @@ public class SettingsActivity extends Activity {
             } else if (screen == SHELF_EDIT) {
                 toggleShelfApp();
                 invalidate();
+                spoken.focusMoved();
                 return;
             } else if (screen == WATCH_APPS) {
                 toggleWatchApp();
@@ -2460,11 +2581,13 @@ public class SettingsActivity extends Activity {
             } else if (focus == 4) {
                 openShelfEditor(true);
             } else if (focus == 5) {
+                openInputsEditor();
+            } else if (focus == 6) {
                 HomeMode.ensureRemoteService(c, 0);   // the buttons work from inside other apps through this service
                 loadApps();
                 screen = REMOTE_KEYS;
                 focus = 0;
-            } else if (focus == 6) {
+            } else if (focus == 7) {
                 pickScroll = 0;
                 screen = POWER;
                 focus = 0;

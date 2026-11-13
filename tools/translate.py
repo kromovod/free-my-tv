@@ -172,15 +172,23 @@ def extract():
 
 # MARK: - Catalogues
 
+def check_lang(lang):
+    """A catalogue name becomes a file name: only a language code gets through (no paths)."""
+    if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z]{2,4})?(_[A-Za-z]{2,4})?", lang or ""):
+        raise SystemExit(f"Not a language code: {lang!r}")
+
+
 def load(lang):
+    check_lang(lang)
     with open(os.path.join(I18N, lang + ".json"), encoding="utf-8") as f:
         return json.load(f)
 
 
 def save(lang, data):
-    path = os.path.join(I18N, lang + ".json")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:   # LF and 2 spaces, like the committed catalogues
-        json.dump(dict(sorted(data.items())), f, ensure_ascii=False, indent=2)
+    check_lang(lang)
+    # LF on every system: written in text mode on Windows, every line would change (\r\n).
+    with open(os.path.join(I18N, lang + ".json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(dict(sorted(data.items())), f, ensure_ascii=False, indent=1)
         f.write("\n")
 
 
@@ -247,6 +255,9 @@ def check(en):
         if not isinstance(cat, dict):
             errors.append(f"{lang}: catalogue must be a JSON object")
             continue
+        with open(os.path.join(I18N, lang + ".json"), "rb") as f:
+            if b"\r" in f.read():
+                errors.append(f"{lang}: CRLF line endings (the catalogues use LF: python3 tools/translate.py writes them so)")
         missing, obsolete, _ = problems(en, cat)
         for label, keys in (("missing key", missing), ("obsolete key", obsolete)):
             for key in keys:
@@ -275,7 +286,8 @@ NAMES = {"pt": "Brazilian Portuguese", "es": "Spanish", "de": "German", "fr": "F
          "pl": "Polish", "sv": "Swedish", "da": "Danish", "nb": "Norwegian Bokmål", "fi": "Finnish", "cs": "Czech",
          "ro": "Romanian", "tr": "Turkish", "ru": "Russian", "uk": "Ukrainian", "el": "Greek", "ja": "Japanese",
          "ko": "Korean", "zh-CN": "Simplified Chinese", "zh-TW": "Traditional Chinese (Taiwan)", "hi": "Hindi", "id": "Indonesian", "vi": "Vietnamese",
-         "hu": "Hungarian", "bg": "Bulgarian", "hr": "Croatian", "sk": "Slovak", "th": "Thai", "ms": "Malay"}
+         "hu": "Hungarian", "bg": "Bulgarian", "hr": "Croatian", "sk": "Slovak", "th": "Thai", "ms": "Malay",
+         "ar": "Arabic"}
 
 PROMPT = """Translate the user interface strings of a TV home screen app ("Free My TV") from English into {name} ({lang}).
 Rules:
@@ -373,7 +385,7 @@ def main():
         for k in (missing + broken)[:8]:
             print(f"         {k!r}")
     if cache:
-        with open(CACHE, "w", encoding="utf-8") as f:
+        with open(CACHE, "w", encoding="utf-8", newline="\n") as f:
             json.dump(cache, f, ensure_ascii=False, indent=1, sort_keys=True)
     return 1 if incomplete else 0
 

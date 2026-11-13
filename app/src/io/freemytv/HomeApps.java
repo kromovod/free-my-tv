@@ -213,7 +213,7 @@ final class HomeApps {
             }
             items.add(it);
         }
-        return items;
+        return Prefs.shelfRecent() ? Recent.order(c, items) : items;
     }
 
     private static String[] known(String pkg) {
@@ -289,6 +289,12 @@ final class HomeApps {
         List<Item> items = new ArrayList<>();
         for (String key : topButtonKeys()) {
             Item item = topButton(key);
+            Item box = TOP_LIVE.equals(key) && c != null ? liveButtonInput(c) : null;
+            if (box != null) {   // Home Settings > Live TV button: an HDMI input, under its own name
+                item = action(INPUT, TOP_LIVE, box.label, "live_tv");
+                item.inputId = box.inputId;
+                item.number = box.number;
+            }
             if (TOP_STORE.equals(key)) {
                 item.pkg = c == null ? null : storePackage(c);
                 if (item.pkg == null) continue;   // keep the saved choice, but no dead button on the home screen
@@ -296,6 +302,14 @@ final class HomeApps {
             items.add(item);
         }
         return items;
+    }
+
+    /** Home Settings > Live TV button: the input it opens instead of Live TV, while the TV still lists it; else null. */
+    static Item liveButtonInput(Context c) {
+        String id = Prefs.liveButton();
+        if (id.isEmpty()) return null;
+        for (Item it : allInputs(c)) if (id.equals(it.inputId)) return it;
+        return null;
     }
 
     /** Only native stores with a launcher entry; no browser fallback or package installation. */
@@ -437,6 +451,28 @@ final class HomeApps {
         if (liveTv(c) != null) items.add(shortcut(LIVE_TV, "live", Ui.tr("Live TV"), "tv"));
         items.addAll(inputs(c, true));
         return items;
+    }
+
+    /** The drawer's inputs in the person's order (Settings > Inputs): the saved order first, an input the TV no
+     *  longer lists keeping its place, then the ones never ordered in the TV's order; the hidden ones stay out. */
+    static List<Item> orderedInputs(Context c) {
+        List<Item> inputs = allInputs(c);
+        List<String> order = Prefs.inputsOrder(), hidden = Prefs.inputsHidden();
+        if (order == null && hidden.isEmpty()) return inputs;
+        List<String> keys = new ArrayList<>();
+        for (Item it : inputs) keys.add(it.key);
+        List<Item> out = new ArrayList<>();
+        for (String key : VisibleOrder.arrange(order, hidden, keys)) {
+            for (Item it : inputs) if (it.key.equals(key)) { out.add(it); break; }
+        }
+        return out;
+    }
+
+    /** Every input the TV lists, for the editor, shown or not. */
+    static List<String[]> inputCandidates(Context c) {
+        List<String[]> out = new ArrayList<>();
+        for (Item it : allInputs(c)) out.add(new String[] {it.key, it.label});
+        return out;
     }
 
     private static List<Item> inputs(Context c) {
@@ -681,6 +717,7 @@ final class HomeApps {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             a.startActivity(intent, options);
+            if (it.kind == APP) Recent.note(a, it.pkg);
             return true;
         } catch (ActivityNotFoundException | SecurityException e) {
             AppLog.w("couldn't open " + it.label + ": " + e.getMessage());
@@ -688,6 +725,7 @@ final class HomeApps {
             plain.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             try {
                 a.startActivity(plain);
+                Recent.note(a, it.pkg);
                 return true;
             } catch (ActivityNotFoundException | SecurityException e2) {
                 return false;
